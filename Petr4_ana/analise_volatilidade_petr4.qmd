@@ -41,6 +41,11 @@ Este relatório explora o comportamento da volatilidade e dos retornos da ação
   library(gridExtra)
   library(broom)
   library(rugarch) 
+  library(moments)  
+  library(coda)
+  library(ggplot2)
+  library(car)       
+  library(boot)
 ```
 
 ```{r}
@@ -73,17 +78,6 @@ ret.1min <- as.xts(dt1$Ret.1min, order.by = dt1$Period)
 ```{r}
 plot(ret.1min, main="PETR4 Retornos 1min", col="black")
 boxplot(as.double(ret.1min), main="Boxplot dos Retornos 1min")
-```
-
-```{r}
-warning=FALSE
-message=FALSE
-# Teste ADF e visualizações iniciais
-par(mfrow=c(1,1))
-
-plot.ts(ret.1min)
-boxplot(as.double(ret.1min))
-
 ```
 
 ## Testes de Estacionariedade
@@ -158,41 +152,187 @@ Ajustamos um modelo `svsample()` a dois blocos temporais:
 2.  10000 pontos após o menor retorno (queda abrupta) para comparar regimes.
 3.  15000 pontos após analise anterior 10000 mil pontos são analisados para observar a recuperação do mercado a uma queda bruta.
 
-```{r setup, include=FALSE}
+```{r, include=FALSE}
+
 echo=FALSE
 warning=FALSE
 message=FALSE
 
-set.seed(123)
-ret_vec <- as.numeric(ret.1min[1:10000])
-sv_fit <- svsample(ret_vec, draws = 5000, burnin = 1000)
-```
 
-```{r}
-idx_max = which.max(dt1$Ret.1min)
+flag_file <- "compressed.txt"
 
-min = idx_max-2500
-max = idx_max+7500
-ret_vec2 <- as.numeric(ret.1min[min:max])
-sv_fit2 <- svsample(ret_vec2, draws = 5000, burnin = 1000)
-```
+if (file.exists(flag_file)) {
 
-```{r}
-min2 = max+12000
-max2 = min2+10000
-ret_vec3 <- as.numeric(ret.1min[min2:max2])
-sv_fit3 <- svsample(ret_vec3, draws = 5000, burnin = 1000)
-```
+  file_sv1  <- "sv_fit.rds"
+  file_sv2  <- "sv_fit2.rds"
+  file_sv3  <- "sv_fit3.rds"
+  
+  sv_fit  <- readRDS(file_sv1)
+  sv_fit2 <- readRDS(file_sv2)
+  sv_fit3 <- readRDS(file_sv3)
+  
+} else {
 
-```{r}
-plot(sv_fit, showobs = FALSE)
-title(main = "Pré queda")
-plot(sv_fit2, showobs = FALSE)
-title(main = "Pós queda")
-plot(sv_fit3, showobs = FALSE)
-title(main = "Recuperação Pós queda")
-plot(sv_fit_complt, showobs = FALSE)
-title(main = "Completo")
+  reduce_and_save <- function(obj, file_out, max_draws = 2000, keep_sample_of_vector = 50, thin_method = c("systematic", "random")) {
+    thin_method <- match.arg(thin_method)
+    orig_class <- class(obj)
+    reduction_log <- list()
+    
+    thin_rows <- function(mat, max_rows) {
+      nr <- nrow(mat)
+      if (nr > max_rows) {
+        if (thin_method == "systematic") {
+          idx <- unique(round(seq(1, nr, length.out = max_rows)))
+        } else {
+          set.seed(1)
+          idx <- sort(sample(nr, size = max_rows))
+        }
+        return(list(mat = mat[idx, , drop = FALSE], kept = length(idx), original = nr))
+      } else {
+        return(list(mat = mat, kept = nr, original = nr))
+      }
+    }
+    
+
+    for (nm in names(obj)) {
+      comp <- obj[[nm]]
+      if (is.matrix(comp) || is.data.frame(comp)) {
+        if (is.numeric(as.matrix(comp))) {
+          res <- thin_rows(as.matrix(comp), max_draws)
+          obj[[nm]] <- res$mat
+          reduction_log[[nm]] <- list(type = "matrix/data.frame",
+                                      original_rows = res$original,
+                                      kept_rows = res$kept)
+        } else {
+
+          reduction_log[[nm]] <- list(type = "matrix_non_numeric_kept")
+        }
+      } else if (is.array(comp) && length(dim(comp)) >= 2 && is.numeric(comp)) {
+        dims <- dim(comp)
+        nfirst <- dims[1]
+        if (nfirst > max_draws) {
+          if (thin_method == "systematic") {
+            idx <- unique(round(seq(1, nfirst, length.out = max_draws)))
+          } else {
+            set.seed(1)
+            idx <- sort(sample(nfirst, size = max_draws))
+          }
+          sel <- rep(list(bquote()), length(dims))
+          sel[[1]] <- idx
+          new_comp <- comp[idx,,, drop = FALSE]
+          obj[[nm]] <- new_comp
+          reduction_log[[nm]] <- list(type = "array_thinned",
+                                      dim_original = dims,
+                                      dim_kept = dim(new_comp))
+        } else {
+          reduction_log[[nm]] <- list(type = "array_kept", dim = dims)
+        }
+      } else if (is.list(comp)) {
+        sublog <- list()
+        for (subnm in names(comp)) {
+          subc <- comp[[subnm]]
+          if (is.matrix(subc) || (is.array(subc) && length(dim(subc)) >= 2 && is.numeric(subc))) {
+            dims <- if (is.matrix(subc)) dim(subc) else dim(subc)
+            nfirst <- if (is.matrix(subc)) nrow(subc) else dims[1]
+            if (nfirst > max_draws && is.numeric(subc)) {
+              if (thin_method == "systematic") {
+                idx <- unique(round(seq(1, nfirst, length.out = max_draws)))
+              } else {
+                set.seed(1)
+                idx <- sort(sample(nfirst, size = max_draws))
+              }
+              if (is.matrix(subc)) {
+                comp[[subnm]] <- subc[idx, , drop = FALSE]
+              } else {
+                comp[[subnm]] <- subc[idx,,, drop = FALSE]
+              }
+              sublog[[subnm]] <- list(action = "thinned", original_first_dim = nfirst, kept = length(idx))
+            } else {
+              sublog[[subnm]] <- list(action = "kept", dim = dims)
+            }
+          } else if (is.numeric(subc) && length(subc) > 10000) {
+            set.seed(1)
+            samp <- sample(length(subc), size = min(keep_sample_of_vector, length(subc)))
+            comp[[subnm]] <- list(sample = subc[samp],
+                                  summary = c(mean = mean(subc), sd = sd(subc), median = median(subc),
+                                              q025 = quantile(subc, 0.025), q975 = quantile(subc, 0.975)))
+            sublog[[subnm]] <- list(action = "vector_summarised_and_sampled", original_length = length(subc),
+                                    kept_sample = length(samp))
+          } else {
+            sublog[[subnm]] <- list(action = "left_as_is")
+          }
+        }
+        obj[[nm]] <- comp
+        reduction_log[[nm]] <- list(type = "list", details = sublog)
+      } else if (is.numeric(comp) && length(comp) > 50000) {
+        set.seed(1)
+        samp_idx <- sample(length(comp), size = min(keep_sample_of_vector, length(comp)))
+        obj[[nm]] <- list(sample = comp[samp_idx],
+                          summary = c(mean = mean(comp), sd = sd(comp), median = median(comp),
+                                      q025 = quantile(comp, 0.025), q975 = quantile(comp, 0.975)))
+        reduction_log[[nm]] <- list(type = "big_vector_summarised", original_length = length(comp),
+                                    kept_sample = length(samp_idx))
+      } else {
+        reduction_log[[nm]] <- list(type = "kept_as_is")
+      }
+    }
+    
+    attr(obj, "reduced_info") <- list(
+      timestamp = Sys.time(),
+      max_draws = max_draws,
+      thin_method = thin_method,
+      keep_sample_of_vector = keep_sample_of_vector,
+      reduction_log = reduction_log
+    )
+    class(obj) <- orig_class
+    
+    saveRDS(obj, file = file_out, compress = "xz")
+    
+    return(obj)
+  }
+
+  set.seed(123)
+  ret_vec <- as.numeric(ret.1min[1:10000])
+  
+  file_sv1 <- "sv_fit.rds"
+  if (file.exists(file_sv1)) {
+    sv_fit_raw <- readRDS(file_sv1)
+    sv_fit <- reduce_and_save(sv_fit_raw, file_out = file_sv1, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit_raw <- svsample(ret_vec, draws = 5000, burnin = 1000)
+    sv_fit <- reduce_and_save(sv_fit_raw, file_out = file_sv1, max_draws = 2000, thin_method = "systematic")
+  }
+
+  idx_max <- which.max(dt1$Ret.1min)
+  min_idx <- idx_max - 2500
+  max_idx <- idx_max + 7500
+  ret_vec2 <- as.numeric(ret.1min[min_idx:max_idx])
+  
+  file_sv2 <- "sv_fit2.rds"
+  if (file.exists(file_sv2)) {
+    sv_fit2_raw <- readRDS(file_sv2)
+    sv_fit2 <- reduce_and_save(sv_fit2_raw, file_out = file_sv2, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit2_raw <- svsample(ret_vec2, draws = 5000, burnin = 1000)
+    sv_fit2 <- reduce_and_save(sv_fit2_raw, file_out = file_sv2, max_draws = 2000, thin_method = "systematic")
+  }
+  
+  min2 <- max_idx + 12000
+  max2 <- min2 + 10000
+  ret_vec3 <- as.numeric(ret.1min[min2:max2])
+  
+  file_sv3 <- "sv_fit3.rds"
+  if (file.exists(file_sv3)) {
+    sv_fit3_raw <- readRDS(file_sv3)
+    sv_fit3 <- reduce_and_save(sv_fit3_raw, file_out = file_sv3, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit3_raw <- svsample(ret_vec3, draws = 5000, burnin = 1000)
+    sv_fit3 <- reduce_and_save(sv_fit3_raw, file_out = file_sv3, max_draws = 2000, thin_method = "systematic")
+  }
+  file.create(flag_file)
+
+}
+
 ```
 
 Analisando os dados pós e pré queda da bolsa podemos ver uma mudança principalmente nas distribuições normais de Mu, Phi e Sigma, onde podemos definir o que cada variavel nos diz como:
@@ -295,7 +435,7 @@ Iremos comparar a volatilidade realizada desses pontos para entender como era um
 rets <- dt1$Ret.1min
 segments <- list(
   A = 1:10000,
-  B = 11600:22600,
+  B = 11600:21600,
   C = 33600:43600
 )
 vol_list <- lapply(names(segments), function(seg_name) {
@@ -318,6 +458,353 @@ ggplot(df_vol, aes(x = index, y = vol, color = segment)) +
     color    = "Segmento"
   ) +
   theme_minimal()
+```
+
+```{r}
+# 1) Realized Variance (RV) and Realized Volatility (sqrt(RV))
+calc_RV <- function(r) {
+  rv <- sum((r)^2, na.rm = TRUE)
+  return(rv)
+}
+
+# 2) Bipower variation (BV)
+calc_BV <- function(r) {
+  # r: vector of returns (aligned in time)
+  if(length(r) < 2) return(NA_real_)
+  bv_raw <- sum(abs(r[-1]) * abs(r[-length(r)]), na.rm = TRUE)
+  bv <- (pi/2)^(-1) * bv_raw
+  return(bv)
+}
+
+# 3) Jump share
+calc_jump_share <- function(r) {
+  rv <- calc_RV(r)
+  bv <- calc_BV(r)
+  jump = max(rv - bv, 0)
+  return(list(RV = rv, BV = bv, Jump = jump, JumpShare = ifelse(rv>0, jump/rv, NA)))
+}
+
+# 4) Descriptive stats
+summary_stats <- function(r) {
+  r <- as.numeric(na.omit(r))
+  n <- length(r)
+  list(
+    n = n,
+    mean = mean(r),
+    sd = sd(r),
+    median_abs_dev = mad(r),
+    skewness = moments::skewness(r),
+    kurtosis = moments::kurtosis(r)
+  )
+}
+
+# 5) Annualization helper (you used minutos_ano = 252*390)
+minutos_ano <- 252 * 390  # já no seu doc; repito para segurança
+annualize_vol_from_rv <- function(rv, n_obs) {
+  # rv = sum(r^2) over n_obs. We want annualized volatility.
+  # var_per_obs = rv / n_obs
+  # annualized_vol = sqrt(var_per_obs) * sqrt(minutos_ano)
+  if(n_obs <= 0) return(NA_real_)
+  vol_ann <- sqrt(rv / n_obs) * sqrt(minutos_ano)
+  return(vol_ann)
+}
+
+# 6) Bootstrap CI for RV (resample returns with replacement within segment)
+bootstrap_RV <- function(r, R = 2000) {
+  r <- na.omit(as.numeric(r))
+  n <- length(r)
+  if(n < 5) return(NULL)
+  bootstat <- function(data, i) {
+    d <- data[i]
+    sum(d^2)
+  }
+  b <- boot::boot(data = r, statistic = bootstat, R = R)
+  ci <- boot::boot.ci(b, type = c("perc","bca"))
+  list(boot = b, ci = ci)
+}
+
+# 7) Permutation test for difference in RV between two segments
+perm_test_RV_diff <- function(r1, r2, R = 2000) {
+  r1 <- na.omit(as.numeric(r1))
+  r2 <- na.omit(as.numeric(r2))
+  obs_diff <- calc_RV(r2) - calc_RV(r1)            # B - A for example
+  pooled <- c(r1, r2)
+  n1 <- length(r1)
+  n2 <- length(r2)
+  perm_diffs <- numeric(R)
+  set.seed(123)
+  for(i in seq_len(R)) {
+    perm <- sample(pooled)
+    perm_diffs[i] <- calc_RV(perm[(n1+1):(n1+n2)]) - calc_RV(perm[1:n1])
+  }
+  p_value <- mean(abs(perm_diffs) >= abs(obs_diff))
+  list(obs_diff = obs_diff, p_value = p_value, perm_diffs = perm_diffs)
+}
+
+# --- Aplicar aos segmentos A/B/C já definidos no seu documento ----------------
+
+segments <- list(A = 1:10000, B = 11600:21600, C = 33600:43600)
+rets <- dt1$Ret.1min
+
+calc_for_segment <- function(name, idx, rets) {
+  r_seg <- as.numeric(rets[idx])
+  rv <- calc_RV(r_seg)
+  bv <- calc_BV(r_seg)
+  jump <- max(rv - bv, 0)
+  jumpshare <- ifelse(rv>0, jump / rv, NA_real_)
+  n_obs <- length(na.omit(r_seg))
+  vol_ann <- annualize_vol_from_rv(rv, n_obs)
+  stats <- summary_stats(r_seg)
+  bs <- bootstrap_RV(r_seg, R = 2000)
+  list(
+    name = name,
+    n = n_obs,
+    RV = rv,
+    BV = bv,
+    Jump = jump,
+    JumpShare = jumpshare,
+    VolAnn = vol_ann,
+    mean = stats$mean,
+    sd = stats$sd,
+    skewness = stats$skewness,
+    kurtosis = stats$kurtosis,
+    boot = bs
+  )
+}
+
+# run for your segments
+seg_names <- names(segments)
+results <- lapply(seg_names, function(sn) calc_for_segment(sn, segments[[sn]], rets))
+names(results) <- seg_names
+
+# build summary table
+summary_table <- do.call(rbind, lapply(results, function(x) {
+  data.frame(
+    segment = x$name,
+    n = x$n,
+    RV = x$RV,
+    BV = x$BV,
+    Jump = x$Jump,
+    JumpShare = x$JumpShare,
+    VolAnn = x$VolAnn,
+    mean = x$mean,
+    sd = x$sd,
+    skewness = x$skewness,
+    kurtosis = x$kurtosis
+  )
+}))
+print(summary_table)
+
+# --- Comparações e testes ---------------------------------------------------
+
+# Percent differences and absolute diffs
+pairwise_compare <- function(x, y) {
+  abs_diff <- x - y
+  pct_diff <- ifelse(y != 0, (x - y) / abs(y) * 100, NA_real_)
+  list(abs_diff = abs_diff, pct_diff = pct_diff)
+}
+
+# Example: Comparing B vs A and C vs A
+diff_BA <- pairwise_compare(results$B$RV, results$A$RV)
+diff_CA <- pairwise_compare(results$C$RV, results$A$RV)
+cat("RV differences (B - A):", diff_BA$abs_diff, "(", round(diff_BA$pct_diff,2), "% )\n")
+cat("RV differences (C - A):", diff_CA$abs_diff, "(", round(diff_CA$pct_diff,2), "% )\n")
+
+# Permutation test for RV difference B vs A
+perm_BA <- perm_test_RV_diff(rets[segments$A], rets[segments$B], R = 3000)
+perm_CA <- perm_test_RV_diff(rets[segments$A], rets[segments$C], R = 3000)
+cat("Perm test p-value B vs A:", perm_BA$p_value, "\n")
+cat("Perm test p-value C vs A:", perm_CA$p_value, "\n")
+
+# Levene test for equality of variances of returns (A,B,C)
+combined <- data.frame(
+  ret = c(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]), as.numeric(rets[segments$C])),
+  seg = factor(c(rep("A", length(segments$A)), rep("B", length(segments$B)), rep("C", length(segments$C))))
+)
+levene_res <- car::leveneTest(ret ~ seg, data = combined)
+print(levene_res)
+
+# KS tests pairwise on returns distributions (A,B)
+ks_AB <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]))
+ks_AC <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$C]))
+print(ks_AB)
+print(ks_AC)
+
+# --- Produzir um quadro final com interpretações automáticas -----------------
+final_df <- summary_table %>%
+  as.data.frame() %>%
+  mutate(
+    VolAnn_rounded = round(VolAnn, 4),
+    JumpShare_pct = round(JumpShare * 100, 2)
+  )
+print(final_df)
+```
+
+```{r}
+# minutos_ano from your doc
+minutos_ano <- 252 * 390
+
+# --- Helper: ensure we have comparable draw counts -------------------------
+# A small util that concatenates chains and returns a matrix of draws.
+get_para_mat <- function(svobj) {
+  # para() returns an mcmc object (mcmc.list) -> as.matrix converts to a matrix draws x params
+  pm <- as.matrix(para(svobj, chain = "concatenated"))
+  # columns usually 'mu', 'phi', 'sigma' (and maybe others if modelled)
+  return(pm)
+}
+get_latent_mat <- function(svobj) {
+  # latent() returns latent log-vol draws (mcmc.list) -> as.matrix -> rows = draws, cols = h[1], h[2], ...
+  lm <- as.matrix(latent(svobj, chain = "concatenated"))
+  # each column is h_t, each row is one posterior draw
+  return(lm)
+}
+
+# --- Extract draws for your three fits ------------------------------------
+# (sv_fit)   -> pre (you used ret_vec <- as.numeric(ret.1min[1:10000]); sv_fit <- svsample(...)
+# (sv_fit2)  -> post
+# (sv_fit3)  -> recovery
+
+para1 <- get_para_mat(sv_fit)    # matrix draws x params
+para2 <- get_para_mat(sv_fit2)
+para3 <- get_para_mat(sv_fit3)
+
+latent1 <- get_latent_mat(sv_fit)   # matrix draws x time
+latent2 <- get_latent_mat(sv_fit2)
+latent3 <- get_latent_mat(sv_fit3)
+
+# --- If draws counts differ, downsample to common number for pairwise comparisons
+n1 <- nrow(para1); n2 <- nrow(para2); n3 <- nrow(para3)
+common_draws <- min(n1, n2, n3)
+
+set.seed(1)
+sample_rows <- function(mat, n) {
+  if(nrow(mat) == n) return(mat)
+  idx <- sample(seq_len(nrow(mat)), n)
+  mat[idx, , drop = FALSE]
+}
+para1s <- sample_rows(para1, common_draws)
+para2s <- sample_rows(para2, common_draws)
+para3s <- sample_rows(para3, common_draws)
+latent1s <- sample_rows(latent1, common_draws)
+latent2s <- sample_rows(latent2, common_draws)
+latent3s <- sample_rows(latent3, common_draws)
+
+# --- 1) Parameter summaries (mu, phi, sigma) -------------------------------
+summ_param <- function(parmat) {
+  # parmat: draws x parameters
+  as.data.frame(t(apply(parmat, 2, function(x) {
+    c(mean = mean(x), sd = sd(x), 
+      q2.5 = quantile(x, 0.025), q97.5 = quantile(x, 0.975))
+  })), row.names = NULL)
+}
+tab_para1 <- summ_param(para1s)
+tab_para2 <- summ_param(para2s)
+tab_para3 <- summ_param(para3s)
+
+tab_para <- dplyr::bind_rows(
+  cbind(regime = "pre",  param = rownames(tab_para1), tab_para1),
+  cbind(regime = "post", param = rownames(tab_para2), tab_para2),
+  cbind(regime = "recov", param = rownames(tab_para3), tab_para3)
+)
+print(tab_para)
+
+# --- Pairwise posterior differences for parameters -------------------------
+# Example: mu_post - mu_pre
+param_diff <- function(matA, matB, parname) {
+  # returns vector of differences B - A for draws
+  diffs <- matB[, parname] - matA[, parname]
+  data.frame(
+    mean = mean(diffs),
+    sd   = sd(diffs),
+    q2.5 = quantile(diffs, 0.025),
+    q97.5= quantile(diffs, 0.975),
+    prob_gt0 = mean(diffs > 0)  # posterior prob that B > A
+  )
+}
+
+# compute differences
+diff_mu_post_pre  <- param_diff(para1s, para2s, "mu")
+diff_phi_post_pre <- param_diff(para1s, para2s, "phi")
+diff_sigma_post_pre <- param_diff(para1s, para2s, "sigma")
+
+# Print
+print(diff_mu_post_pre); print(diff_phi_post_pre); print(diff_sigma_post_pre)
+
+# --- 2) Variance/Volatility from latent states ------------------------------
+# instantaneous variance v_t = exp(h_t); per-draw mean variance across t:
+per_draw_mean_variance <- function(latmat) {
+  # latmat: draws x time (h_t)
+  # compute per-draw mean variance = mean(exp(h_t)) across t
+  rowMeans(exp(latmat), na.rm = TRUE)    # vector length = draws
+}
+per_draw_mean_sd <- function(latmat) {
+  sqrt(per_draw_mean_variance(latmat))
+}
+per_draw_ann_vol <- function(latmat) {
+  per_draw_mean_sd(latmat) * sqrt(minutos_ano)
+}
+
+v1 <- per_draw_mean_variance(latent1s)
+v2 <- per_draw_mean_variance(latent2s)
+v3 <- per_draw_mean_variance(latent3s)
+
+sd1 <- sqrt(v1); sd2 <- sqrt(v2); sd3 <- sqrt(v3)
+ann1 <- sd1 * sqrt(minutos_ano)
+ann2 <- sd2 * sqrt(minutos_ano)
+ann3 <- sd3 * sqrt(minutos_ano)
+
+# Summaries table
+summarize_draws <- function(vec) {
+  c(mean = mean(vec), median = median(vec), sd = sd(vec),
+    q2.5 = quantile(vec, 0.025), q97.5 = quantile(vec, 0.975))
+}
+tab_vol <- rbind(
+  pre  = summarize_draws(ann1),
+  post = summarize_draws(ann2),
+  recov= summarize_draws(ann3)
+)
+tab_vol <- as.data.frame(tab_vol)
+tab_vol$regime <- rownames(tab_vol)
+tab_vol <- tab_vol[, c("regime", names(tab_vol)[1:(ncol(tab_vol)-1)])]
+print(tab_vol)
+
+# --- Pairwise comparisons of annualized vol (posterior differences) ----------
+diff_ann_post_pre <- ann2 - ann1   # vector of draws
+diff_ann_recov_pre <- ann3 - ann1
+
+comp_ann <- data.frame(
+  mean = c(mean(diff_ann_post_pre), mean(diff_ann_recov_pre)),
+  sd   = c(sd(diff_ann_post_pre), sd(diff_ann_recov_pre)),
+  q2.5 = c(quantile(diff_ann_post_pre, 0.025), quantile(diff_ann_recov_pre, 0.025)),
+  q97.5= c(quantile(diff_ann_post_pre, 0.975), quantile(diff_ann_recov_pre, 0.975)),
+  prob_gt0 = c(mean(diff_ann_post_pre > 0), mean(diff_ann_recov_pre > 0))
+)
+rownames(comp_ann) <- c("post - pre", "recov - pre")
+print(comp_ann)
+
+# --- 3) Plot posterior densities for annualized vol -------------------------
+df_plot <- data.frame(
+  ann = c(ann1, ann2, ann3),
+  regime = factor(rep(c("pre","post","recov"),
+                      times = c(length(ann1), length(ann2), length(ann3))))
+)
+p <- ggplot(df_plot, aes(x = ann, fill = regime)) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Posterior densities of per-segment annualized volatility",
+       x = "Annualized volatility (approx)", y = "Density") +
+  theme_minimal()
+print(p)
+
+# annotate posterior probability that post > pre
+prob_post_gt_pre <- mean(ann2 > ann1)
+prob_recov_gt_pre <- mean(ann3 > ann1)
+cat(sprintf("Posterior prob(ann_post > ann_pre) = %.3f\n", prob_post_gt_pre))
+cat(sprintf("Posterior prob(ann_recov > ann_pre) = %.3f\n", prob_recov_gt_pre))
+
+# --- 4) OPTIONAL: pointwise posterior quantiles (time-resolved) -------------
+# If you want time series of posterior median vol_t and 95% band
+median_vol1_t <- apply(exp(latent1s), 2, median)   # median exp(h_t) per time => variance
+sd_median1_t <- sqrt(median_vol1_t)
 ```
 
 ```{r}
