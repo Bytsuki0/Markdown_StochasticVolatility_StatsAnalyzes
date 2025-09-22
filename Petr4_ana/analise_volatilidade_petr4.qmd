@@ -76,7 +76,7 @@ ret.1min <- as.xts(dt1$Ret.1min, order.by = dt1$Period)
 ## Observação inicial
 
 ```{r}
-plot(ret.1min, main="PETR4 Retornos 1min", col="black")
+plot(dt1$Close.1min, main="PETR4 Retornos 1min", col="black")
 boxplot(as.double(ret.1min), main="Boxplot dos Retornos 1min")
 ```
 
@@ -135,9 +135,11 @@ par(mfrow = c(1, 2))
 acf(log_ret_vec[1:10000], main = "ACF - Log-Retornos Pré queda", na.action = na.pass)
 pacf(log_ret_vec[1:10000], main = "PACF - Log-Retornos Pré queda", na.action = na.pass)
 
+p1=idx_min-2500
+p2=p1+10000
 par(mfrow = c(1, 2))
-acf(log_ret_vec[idx_min:p2], main = "ACF - Log-Retornos Pós queda", na.action = na.pass)
-pacf(log_ret_vec[idx_min:p2], main = "PACF - Log-Retornos Pós queda", na.action = na.pass)
+acf(log_ret_vec[p1:p2], main = "ACF - Log-Retornos Pós queda", na.action = na.pass)
+pacf(log_ret_vec[p1:p2], main = "PACF - Log-Retornos Pós queda", na.action = na.pass)
 ```
 
 ## 1. Objetivos
@@ -335,6 +337,15 @@ if (file.exists(flag_file)) {
 
 ```
 
+```{r}
+plot(sv_fit, showobs = FALSE)
+title(main = "Pré queda")
+plot(sv_fit2, showobs = FALSE)
+title(main = "Pós queda")
+plot(sv_fit3, showobs = FALSE)
+title(main = "Recuperação Pós queda")
+```
+
 Analisando os dados pós e pré queda da bolsa podemos ver uma mudança principalmente nas distribuições normais de Mu, Phi e Sigma, onde podemos definir o que cada variavel nos diz como:
 
 ### Interpretação de μ (mu)
@@ -434,9 +445,9 @@ Iremos comparar a volatilidade realizada desses pontos para entender como era um
 ```{r}
 rets <- dt1$Ret.1min
 segments <- list(
-  A = 1:10000,
-  B = 11600:21600,
-  C = 33600:43600
+  pré = 1:10000,
+  pós = 12273:22273,
+  recov = 34273:44600
 )
 vol_list <- lapply(names(segments), function(seg_name) {
   idx <- segments[[seg_name]]
@@ -452,22 +463,112 @@ df_vol <- bind_rows(vol_list)
 ggplot(df_vol, aes(x = index, y = vol, color = segment)) +
   geom_line() +
   labs(
-    title    = "Volatilidade Realizada Acumulada por Segmento de Índices",
+    title    = "Volatilidade Acumulada por Segmento de Índices",
     x        = "Índice",
-    y        = "Volatilidade Realizada",
-    color    = "Segmento"
+    y        = "Volatilidade Acumulada",
+    color    = "Periodos"
   ) +
   theme_minimal()
 ```
 
 ```{r}
-# 1) Realized Variance (RV) and Realized Volatility (sqrt(RV))
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+# coluna de preço (ajuste se necessário)
+price_col <- "Close.1min"   # ou "close1min"
+
+if(!(price_col %in% names(dt1))) stop("dt1 não contém a coluna de preço especificada (Close.1min).")
+
+# índices dos segmentos (conforme pedido)
+segments_idx <- list(
+  pre   = c(start = 1,       end = 10000),
+  post  = c(start = 12273,   end = 22273),
+  recov = c(start = 34273,   end = 44600)
+)
+
+# construir data.frame de segmentos (em índices)
+segments_df_idx <- lapply(names(segments_idx), function(name) {
+  idx <- segments_idx[[name]]
+  tibble::tibble(
+    segment = name,
+    xmin = as.numeric(idx["start"]) - 0.5,  # pequeno padding para cobrir o tick inteiro
+    xmax = as.numeric(idx["end"]) + 0.5
+  )
+}) %>% bind_rows() %>%
+  mutate(label = case_when(
+    segment == "pre"   ~ "Pré-queda",
+    segment == "post"  ~ "Pós-queda",
+    segment == "recov" ~ "Recuperação",
+    TRUE ~ segment
+  ))
+
+# preparar df com índice e preço
+plot_df_idx <- dt1 %>%
+  select(all_of(price_col)) %>%
+  mutate(index = seq_len(n())) %>%
+  rename(price = !!price_col)
+
+# escolher cores para fundo
+fill_colors <- c("Pré-queda" = "#E8fA22", "Pós-queda" = "#FC886D", "Recuperação" = "#6DD6FC")
+
+# criar plot usando índice no eixo x
+p_idx <- ggplot(plot_df_idx, aes(x = index, y = price)) +
+  # fundo colorido por segmento (usando índices)
+  geom_rect(data = segments_df_idx,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = label),
+            inherit.aes = FALSE, alpha = 0.28) +
+  # série de preços
+  geom_line(color = "black", size = 0.35) +
+  # linhas verticais de início/fim (sem legenda)
+  geom_vline(data = segments_df_idx, aes(xintercept = xmin + 0.5),
+             linetype = "dashed", color = "black", size = 0.45, inherit.aes = FALSE, show.legend = FALSE) +
+  geom_vline(data = segments_df_idx, aes(xintercept = xmax - 0.5),
+             linetype = "dashed", color = "black", size = 0.45, inherit.aes = FALSE, show.legend = FALSE) +
+  # legenda apenas para regiões
+  scale_fill_manual(name = "Segmento", values = fill_colors) +
+  labs(
+    title = "Preço de Fechamento — segmentos destacados (por índice)",
+    subtitle = "Eixo x = índice (linha do dataset); regiões sombreadas = Pré / Pós / Recuperação",
+    x = "Índice (observação)",
+    y = "Preço de Fechamento"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(size = 10),
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 0)
+  ) +
+  coord_cartesian(expand = FALSE)
+
+# melhorar ticks do eixo x: mostrar alguns marcos (inícios/fins + quantis)
+# calcular quebras úteis
+idx_breaks <- unique(c(
+  1,
+  unlist(lapply(segments_idx, function(x) c(x["start"], x["end"]))),
+  floor(nrow(plot_df_idx) * c(0.25, 0.5, 0.75)),
+  nrow(plot_df_idx)
+))
+idx_breaks <- sort(unique(idx_breaks))
+p_idx <- p_idx + scale_x_continuous(breaks = idx_breaks, labels = idx_breaks)
+
+print(p_idx)
+# ggsave("close_index_segments.png", p_idx, width = 12, height = 5, dpi = 300)
+
+
+```
+
+```{r}
+# Realized Variance (RV)
 calc_RV <- function(r) {
   rv <- sum((r)^2, na.rm = TRUE)
   return(rv)
 }
 
-# 2) Bipower variation (BV)
+# Bipower variation (BV)
 calc_BV <- function(r) {
   # r: vector of returns (aligned in time)
   if(length(r) < 2) return(NA_real_)
@@ -476,7 +577,6 @@ calc_BV <- function(r) {
   return(bv)
 }
 
-# 3) Jump share
 calc_jump_share <- function(r) {
   rv <- calc_RV(r)
   bv <- calc_BV(r)
@@ -484,7 +584,7 @@ calc_jump_share <- function(r) {
   return(list(RV = rv, BV = bv, Jump = jump, JumpShare = ifelse(rv>0, jump/rv, NA)))
 }
 
-# 4) Descriptive stats
+
 summary_stats <- function(r) {
   r <- as.numeric(na.omit(r))
   n <- length(r)
@@ -498,18 +598,14 @@ summary_stats <- function(r) {
   )
 }
 
-# 5) Annualization helper (you used minutos_ano = 252*390)
-minutos_ano <- 252 * 390  # já no seu doc; repito para segurança
+minutos_ano <- 252 * 390  
 annualize_vol_from_rv <- function(rv, n_obs) {
-  # rv = sum(r^2) over n_obs. We want annualized volatility.
-  # var_per_obs = rv / n_obs
-  # annualized_vol = sqrt(var_per_obs) * sqrt(minutos_ano)
   if(n_obs <= 0) return(NA_real_)
   vol_ann <- sqrt(rv / n_obs) * sqrt(minutos_ano)
   return(vol_ann)
 }
 
-# 6) Bootstrap CI for RV (resample returns with replacement within segment)
+
 bootstrap_RV <- function(r, R = 2000) {
   r <- na.omit(as.numeric(r))
   n <- length(r)
@@ -523,11 +619,10 @@ bootstrap_RV <- function(r, R = 2000) {
   list(boot = b, ci = ci)
 }
 
-# 7) Permutation test for difference in RV between two segments
 perm_test_RV_diff <- function(r1, r2, R = 2000) {
   r1 <- na.omit(as.numeric(r1))
   r2 <- na.omit(as.numeric(r2))
-  obs_diff <- calc_RV(r2) - calc_RV(r1)            # B - A for example
+  obs_diff <- calc_RV(r2) - calc_RV(r1)     
   pooled <- c(r1, r2)
   n1 <- length(r1)
   n2 <- length(r2)
@@ -541,7 +636,6 @@ perm_test_RV_diff <- function(r1, r2, R = 2000) {
   list(obs_diff = obs_diff, p_value = p_value, perm_diffs = perm_diffs)
 }
 
-# --- Aplicar aos segmentos A/B/C já definidos no seu documento ----------------
 
 segments <- list(A = 1:10000, B = 11600:21600, C = 33600:43600)
 rets <- dt1$Ret.1min
@@ -572,12 +666,10 @@ calc_for_segment <- function(name, idx, rets) {
   )
 }
 
-# run for your segments
 seg_names <- names(segments)
 results <- lapply(seg_names, function(sn) calc_for_segment(sn, segments[[sn]], rets))
 names(results) <- seg_names
 
-# build summary table
 summary_table <- do.call(rbind, lapply(results, function(x) {
   data.frame(
     segment = x$name,
@@ -595,28 +687,23 @@ summary_table <- do.call(rbind, lapply(results, function(x) {
 }))
 print(summary_table)
 
-# --- Comparações e testes ---------------------------------------------------
 
-# Percent differences and absolute diffs
 pairwise_compare <- function(x, y) {
   abs_diff <- x - y
   pct_diff <- ifelse(y != 0, (x - y) / abs(y) * 100, NA_real_)
   list(abs_diff = abs_diff, pct_diff = pct_diff)
 }
 
-# Example: Comparing B vs A and C vs A
 diff_BA <- pairwise_compare(results$B$RV, results$A$RV)
 diff_CA <- pairwise_compare(results$C$RV, results$A$RV)
 cat("RV differences (B - A):", diff_BA$abs_diff, "(", round(diff_BA$pct_diff,2), "% )\n")
 cat("RV differences (C - A):", diff_CA$abs_diff, "(", round(diff_CA$pct_diff,2), "% )\n")
 
-# Permutation test for RV difference B vs A
 perm_BA <- perm_test_RV_diff(rets[segments$A], rets[segments$B], R = 3000)
 perm_CA <- perm_test_RV_diff(rets[segments$A], rets[segments$C], R = 3000)
 cat("Perm test p-value B vs A:", perm_BA$p_value, "\n")
 cat("Perm test p-value C vs A:", perm_CA$p_value, "\n")
 
-# Levene test for equality of variances of returns (A,B,C)
 combined <- data.frame(
   ret = c(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]), as.numeric(rets[segments$C])),
   seg = factor(c(rep("A", length(segments$A)), rep("B", length(segments$B)), rep("C", length(segments$C))))
@@ -624,13 +711,11 @@ combined <- data.frame(
 levene_res <- car::leveneTest(ret ~ seg, data = combined)
 print(levene_res)
 
-# KS tests pairwise on returns distributions (A,B)
 ks_AB <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]))
 ks_AC <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$C]))
 print(ks_AB)
 print(ks_AC)
 
-# --- Produzir um quadro final com interpretações automáticas -----------------
 final_df <- summary_table %>%
   as.data.frame() %>%
   mutate(
@@ -641,38 +726,25 @@ print(final_df)
 ```
 
 ```{r}
-# minutos_ano from your doc
 minutos_ano <- 252 * 390
 
-# --- Helper: ensure we have comparable draw counts -------------------------
-# A small util that concatenates chains and returns a matrix of draws.
 get_para_mat <- function(svobj) {
-  # para() returns an mcmc object (mcmc.list) -> as.matrix converts to a matrix draws x params
   pm <- as.matrix(para(svobj, chain = "concatenated"))
-  # columns usually 'mu', 'phi', 'sigma' (and maybe others if modelled)
   return(pm)
 }
 get_latent_mat <- function(svobj) {
-  # latent() returns latent log-vol draws (mcmc.list) -> as.matrix -> rows = draws, cols = h[1], h[2], ...
   lm <- as.matrix(latent(svobj, chain = "concatenated"))
-  # each column is h_t, each row is one posterior draw
   return(lm)
 }
 
-# --- Extract draws for your three fits ------------------------------------
-# (sv_fit)   -> pre (you used ret_vec <- as.numeric(ret.1min[1:10000]); sv_fit <- svsample(...)
-# (sv_fit2)  -> post
-# (sv_fit3)  -> recovery
-
-para1 <- get_para_mat(sv_fit)    # matrix draws x params
+para1 <- get_para_mat(sv_fit)
 para2 <- get_para_mat(sv_fit2)
 para3 <- get_para_mat(sv_fit3)
 
-latent1 <- get_latent_mat(sv_fit)   # matrix draws x time
+latent1 <- get_latent_mat(sv_fit)  
 latent2 <- get_latent_mat(sv_fit2)
 latent3 <- get_latent_mat(sv_fit3)
 
-# --- If draws counts differ, downsample to common number for pairwise comparisons
 n1 <- nrow(para1); n2 <- nrow(para2); n3 <- nrow(para3)
 common_draws <- min(n1, n2, n3)
 
@@ -689,9 +761,7 @@ latent1s <- sample_rows(latent1, common_draws)
 latent2s <- sample_rows(latent2, common_draws)
 latent3s <- sample_rows(latent3, common_draws)
 
-# --- 1) Parameter summaries (mu, phi, sigma) -------------------------------
 summ_param <- function(parmat) {
-  # parmat: draws x parameters
   as.data.frame(t(apply(parmat, 2, function(x) {
     c(mean = mean(x), sd = sd(x), 
       q2.5 = quantile(x, 0.025), q97.5 = quantile(x, 0.975))
@@ -708,34 +778,25 @@ tab_para <- dplyr::bind_rows(
 )
 print(tab_para)
 
-# --- Pairwise posterior differences for parameters -------------------------
-# Example: mu_post - mu_pre
 param_diff <- function(matA, matB, parname) {
-  # returns vector of differences B - A for draws
   diffs <- matB[, parname] - matA[, parname]
   data.frame(
     mean = mean(diffs),
     sd   = sd(diffs),
     q2.5 = quantile(diffs, 0.025),
     q97.5= quantile(diffs, 0.975),
-    prob_gt0 = mean(diffs > 0)  # posterior prob that B > A
+    prob_gt0 = mean(diffs > 0)  
   )
 }
 
-# compute differences
 diff_mu_post_pre  <- param_diff(para1s, para2s, "mu")
 diff_phi_post_pre <- param_diff(para1s, para2s, "phi")
 diff_sigma_post_pre <- param_diff(para1s, para2s, "sigma")
 
-# Print
-print(diff_mu_post_pre); print(diff_phi_post_pre); print(diff_sigma_post_pre)
 
-# --- 2) Variance/Volatility from latent states ------------------------------
-# instantaneous variance v_t = exp(h_t); per-draw mean variance across t:
+print(diff_mu_post_pre); print(diff_phi_post_pre); print(diff_sigma_post_pre)
 per_draw_mean_variance <- function(latmat) {
-  # latmat: draws x time (h_t)
-  # compute per-draw mean variance = mean(exp(h_t)) across t
-  rowMeans(exp(latmat), na.rm = TRUE)    # vector length = draws
+  rowMeans(exp(latmat), na.rm = TRUE)   
 }
 per_draw_mean_sd <- function(latmat) {
   sqrt(per_draw_mean_variance(latmat))
@@ -753,7 +814,6 @@ ann1 <- sd1 * sqrt(minutos_ano)
 ann2 <- sd2 * sqrt(minutos_ano)
 ann3 <- sd3 * sqrt(minutos_ano)
 
-# Summaries table
 summarize_draws <- function(vec) {
   c(mean = mean(vec), median = median(vec), sd = sd(vec),
     q2.5 = quantile(vec, 0.025), q97.5 = quantile(vec, 0.975))
@@ -768,8 +828,7 @@ tab_vol$regime <- rownames(tab_vol)
 tab_vol <- tab_vol[, c("regime", names(tab_vol)[1:(ncol(tab_vol)-1)])]
 print(tab_vol)
 
-# --- Pairwise comparisons of annualized vol (posterior differences) ----------
-diff_ann_post_pre <- ann2 - ann1   # vector of draws
+diff_ann_post_pre <- ann2 - ann1  
 diff_ann_recov_pre <- ann3 - ann1
 
 comp_ann <- data.frame(
@@ -782,7 +841,6 @@ comp_ann <- data.frame(
 rownames(comp_ann) <- c("post - pre", "recov - pre")
 print(comp_ann)
 
-# --- 3) Plot posterior densities for annualized vol -------------------------
 df_plot <- data.frame(
   ann = c(ann1, ann2, ann3),
   regime = factor(rep(c("pre","post","recov"),
@@ -795,17 +853,285 @@ p <- ggplot(df_plot, aes(x = ann, fill = regime)) +
   theme_minimal()
 print(p)
 
-# annotate posterior probability that post > pre
 prob_post_gt_pre <- mean(ann2 > ann1)
 prob_recov_gt_pre <- mean(ann3 > ann1)
 cat(sprintf("Posterior prob(ann_post > ann_pre) = %.3f\n", prob_post_gt_pre))
 cat(sprintf("Posterior prob(ann_recov > ann_pre) = %.3f\n", prob_recov_gt_pre))
 
-# --- 4) OPTIONAL: pointwise posterior quantiles (time-resolved) -------------
-# If you want time series of posterior median vol_t and 95% band
-median_vol1_t <- apply(exp(latent1s), 2, median)   # median exp(h_t) per time => variance
+median_vol1_t <- apply(exp(latent1s), 2, median)   
 sd_median1_t <- sqrt(median_vol1_t)
 ```
+
+```{r}
+# Pré-requisitos (assume que o código anterior já foi executado e que ann1/ann2/ann3 existem)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(knitr)   # para kable
+library(scales)  # formatação opcional
+
+# 1) Dataframe com os draws emparelhados (cada linha = um draw)
+#    -> isso facilita análises ponto-a-ponto e exportação
+ann_draws_df <- data.frame(
+  draw = seq_len(common_draws),
+  pre  = ann1,
+  post = ann2,
+  recov = ann3
+)
+
+# Mostrar as primeiras linhas (raw draws usados para o boxplot)
+head(ann_draws_df)
+
+# Opcional: salvar os dados em CSV para anexar ao relatório
+# write.csv(ann_draws_df, "ann_draws_by_regime.csv", row.names = FALSE)
+
+# 2) Tabela resumo por regime (média, mediana, sd, IC95 e n draws)
+summary_by_regime <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol") %>%
+  group_by(regime) %>%
+  summarise(
+    n = n(),
+    mean = mean(ann_vol),
+    median = median(ann_vol),
+    sd = sd(ann_vol),
+    q2.5 = quantile(ann_vol, 0.025),
+    q97.5 = quantile(ann_vol, 0.975)
+  ) %>%
+  arrange(regime)
+
+# Mostrar tabela resumo formatada
+knitr::kable(summary_by_regime, digits = c(0,0,4,4,4,4,4),
+             caption = "Resumo posterior da volatilidade anualizada por regime")
+
+# 3) Tabela de diferenças (post - pre) e (recov - pre) com métricas
+diff_draws <- ann_draws_df %>%
+  mutate(
+    diff_post_pre = post - pre,
+    diff_recov_pre = recov - pre,
+    pct_post_pre = 100 * (post - pre) / pre,
+    pct_recov_pre = 100 * (recov - pre) / pre
+  )
+
+diff_summary <- tibble(
+  comparison = c("post - pre", "recov - pre"),
+  mean_diff = c(mean(diff_draws$diff_post_pre), mean(diff_draws$diff_recov_pre)),
+  sd_diff   = c(sd(diff_draws$diff_post_pre), sd(diff_draws$diff_recov_pre)),
+  q2.5_diff = c(quantile(diff_draws$diff_post_pre, 0.025), quantile(diff_draws$diff_recov_pre, 0.025)),
+  q97.5_diff= c(quantile(diff_draws$diff_post_pre, 0.975), quantile(diff_draws$diff_recov_pre, 0.975)),
+  prob_gt0  = c(mean(diff_draws$diff_post_pre > 0), mean(diff_draws$diff_recov_pre > 0)),
+  mean_pct_change = c(mean(diff_draws$pct_post_pre, na.rm = TRUE), mean(diff_draws$pct_recov_pre, na.rm = TRUE))
+)
+
+knitr::kable(diff_summary, digits = c(0,4,4,4,4,4,2),
+             caption = "Resumo das diferenças posteriores entre regimes (valor absoluto e %).")
+
+# 4) Boxplot + pontos (jitter) das distribuições posteriores (visual)
+df_for_plot <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol")
+
+p_box <- ggplot(df_for_plot, aes(x = regime, y = ann_vol, fill = regime)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +            # boxplot sem outliers plotados (evita duplicação)
+  stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") + # mediana destacada
+  labs(
+    title = "Boxplot das distribuições posteriores de volatilidade anualizada",
+    subtitle = "Cada ponto = 1 draw posterior (amostra MCMC); boxes mostram mediana e IQR",
+    x = "Períodos",
+    y = "Volatilidade anualizada (aprox.)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_box)
+
+# 5) Tabela final combinada para relatório (resumo + probabilidade)
+report_table <- summary_by_regime %>%
+  left_join(
+    tibble(
+      regime = c("pre","post","recov"),
+      prob_gt_pre = c(NA, mean(ann_draws_df$post > ann_draws_df$pre), mean(ann_draws_df$recov > ann_draws_df$pre))
+    ),
+    by = "periodos"
+  ) %>%
+  mutate(
+    mean = round(mean, 4),
+    median = round(median, 4),
+    sd = round(sd, 4),
+    q2.5 = round(q2.5, 4),
+    q97.5 = round(q97.5, 4),
+    prob_gt_pre = ifelse(is.na(prob_gt_pre), "-", round(prob_gt_pre, 4))
+  )
+
+knitr::kable(report_table, caption = "Tabela resumida para relatório: volatilidade posterior por regime e probabilidade (post/recov > pre)")
+
+# 6) (Opcional) exportar tabelas para CSVs
+# write.csv(ann_draws_df, "ann_draws_df.csv", row.names = FALSE)
+# write.csv(summary_by_regime, "summary_by_regime.csv", row.names = FALSE)
+# write.csv(diff_summary, "diff_summary.csv", row.names = FALSE)
+
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Recriar df_for_plot (se necessário)
+df_for_plot <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol") %>%
+  mutate(regime = factor(regime, levels = c("pre","post","recov")))
+
+# statistics por regime
+ann_stats <- df_for_plot %>%
+  group_by(regime) %>%
+  summarise(
+    n = n(),
+    mean = mean(ann_vol),
+    median = median(ann_vol),
+    sd = sd(ann_vol),
+    q025 = quantile(ann_vol, 0.025),
+    q975 = quantile(ann_vol, 0.975),
+    .groups = "drop"
+  )
+
+# calcular posição automática para labels (pequeno espaço acima do maior q975)
+y_max_q975 <- max(ann_stats$q975, na.rm = TRUE)
+y_margin <- 0.03 * y_max_q975   # 3% do valor máximo como margem
+ann_stats <- ann_stats %>%
+  mutate(
+    label = sprintf("mean=%.3f\n95%%CI=[%.3f,%.3f]", mean, q025, q975),
+    y_pos = q975 + y_margin
+  )
+
+# Gráfico: violin + box + pontos médios + barras de IC + anotação
+p_clean_fix <- ggplot(df_for_plot, aes(x = regime, y = ann_vol, fill = regime)) +
+  geom_violin(width = 0.9, trim = FALSE, alpha = 0.35, color = NA) +
+  geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.9, color = "black") +
+  stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white", color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 2.5, fill = "red", color = "black") +
+  geom_errorbar(data = ann_stats, aes(x = regime, ymin = q025, ymax = q975),
+                width = 0.05, color = "black", size = 0.6, inherit.aes = FALSE) +
+  geom_text(data = ann_stats, aes(x = regime, y = y_pos, label = label),
+            size = 6, vjust = 0, inherit.aes = FALSE) +  # aumentado
+  labs(
+    title = "Distribuições posteriores da volatilidade anualizada por regime",
+    subtitle = "Violin = densidade posterior; Box = IQR; ◼ mediana; ● média (vermelho); linhas vert = IC95%",
+    x = "Periodos",
+    y = "Volatilidade anualizada (aprox.)"
+  ) +
+  theme_minimal(base_size = 15) +   # aumentado de 12 → 15
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 18),   # +3
+    plot.subtitle = element_text(size = 13),               # +3
+    axis.title = element_text(size = 14),                  # +3
+    axis.text = element_text(size = 13)                    # +3
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_cartesian(clip = "off")
+
+print(p_clean_fix)
+# ggsave("vol_posterior_regimes_clean.png", plot = p_clean_fix, width = 8, height = 5, dpi = 300)
+
+
+
+```
+
+## Teoria por trás da construção da tabela de comparação entre períodos
+
+### 1. Base: amostras da posterior
+
+Seja $\{\theta^{(m)}, h_{1:T}^{(m)}\}_{m=1}^M$ o conjunto de amostras geradas pelo algoritmo MCMC a partir da distribuição posterior conjunta
+
+$$
+p(\theta, h_{1:T}\mid r_{1:T}),
+$$
+
+onde $\theta$ são os parâmetros do modelo SV e $h_t$ os estados latentes.
+
+Defina para cada regime (pré, pós, recov) a **quantidade agregada de interesse** por draw $m$ — aqui, a volatilidade anualizada média no regime:
+
+$$
+v^{(m)}_{\text{pre}}, \quad v^{(m)}_{\text{post}}, \quad v^{(m)}_{\text{recov}}.
+$$
+
+Cada $v^{(m)}$ é obtido transformando os estados latentes via $v_t^{(m)} = \exp(h_t^{(m)})$, agregando temporalmente e anualizando:
+
+$$
+v^{(m)}_{\text{ann}} = \sqrt{\frac{1}{T}\sum_t v_t^{(m)}} \times \sqrt{\text{scaling}}.
+$$
+
+------------------------------------------------------------------------
+
+### 2. Distribuição posterior da diferença
+
+Para inferir diferenças entre regimes (ex.: pós − pré), construímos a **distribuição posterior da diferença** emparelhando draws:
+
+$$
+\Delta^{(m)}_{\text{post-pre}} = v^{(m)}_{\text{post}} - v^{(m)}_{\text{pre}}, \quad m=1,\dots,M.
+$$
+
+A coleção $\{\Delta^{(m)}\}$ é uma amostra empírica de $p(\Delta\mid \text{dados})$.
+
+------------------------------------------------------------------------
+
+### 3. Estatísticas sumarizadas
+
+Da distribuição empírica $\{\Delta^{(m)}\}$ derivamos:
+
+-   **Média posterior:**
+
+$$
+\widehat{\mathbb{E}}[\Delta] = \frac{1}{M}\sum_{m=1}^M \Delta^{(m)}.
+$$
+
+-   **Desvio-padrão posterior:**
+
+$$
+\widehat{\mathrm{sd}}(\Delta) = \sqrt{\frac{1}{M-1}\sum_{m=1}^M \big(\Delta^{(m)} - \widehat{\mathbb{E}}[\Delta]\big)^2 }.
+$$
+
+-   **Intervalo de credibilidade 95%:**
+
+$$
+[q_{0.025}, q_{0.975}],
+$$
+
+onde $q_p$ são quantis empíricos da amostra.
+
+-   **Probabilidade posterior de aumento:**
+
+$$
+\Pr(\Delta>0\mid\text{dados}) \approx \frac{1}{M}\sum_{m=1}^M \mathbf{1}\{\Delta^{(m)} > 0\}.
+$$
+
+-   **Alteração percentual média:**
+
+$$
+\text{mean\_pct\_change} = \frac{1}{M}\sum_{m=1}^M 
+100 \cdot \frac{v^{(m)}_{\text{post}} - v^{(m)}_{\text{pre}}}{v^{(m)}_{\text{pre}}}.
+$$
+
+------------------------------------------------------------------------
+
+### 4. Interpretação
+
+-   A incerteza é propagada automaticamente, pois cada $\Delta^{(m)}$ carrega incerteza dos parâmetros e estados.\
+-   Intervalos de credibilidade têm interpretação probabilística direta: dado o modelo e os dados, há 95% de probabilidade a posteriori de $\Delta$ estar no intervalo.\
+-   $\Pr(\Delta > 0)$ fornece evidência direta de que a volatilidade pós é maior (ou menor) que a pré.
+
+------------------------------------------------------------------------
+
+### 5. Pressupostos e boas práticas
+
+-   Inferência é condicional ao modelo SV e às *priors*.\
+-   É essencial verificar convergência das cadeias MCMC (traceplots, $\hat{R}$, ESS).\
+-   Reportar número efetivo de amostras (ESS) e, se possível, realizar análise de sensibilidade a diferentes priors.
+
+------------------------------------------------------------------------
+
+### 6. Nota final
+
+Diferentemente da abordagem frequentista (baseada em estimadores pontuais e testes assintóticos), a abordagem bayesiana fornece probabilidades diretas sobre as hipóteses de interesse, como $\Pr(\Delta > 0)$.
 
 ```{r}
 rets <- dt1$Ret.1min
@@ -885,17 +1211,6 @@ time_index3 <- seq(
   length.out = length(vol_est3)
 )
 
-h_mcmc <- sv_fit_complt$latent[[1]]  
-h_mat <- as.matrix(h_mcmc)     
-dim(h_mat)                    
-h_mean <- colMeans(h_mat)     
-vol_est_complt <- exp(h_mean / 2)   
-
-time_index_complt <- seq(
-  from       = as.POSIXct("2021-01-01 09:31"),
-  by         = "1 min",
-  length.out = length(vol_est_complt)
-)
 
 df_est <- data.frame(time = time_index, vol = vol_est)
 df_est2 <- data.frame(time = time_index2, vol = vol_est2)
