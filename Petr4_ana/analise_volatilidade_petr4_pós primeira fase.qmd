@@ -1,0 +1,1208 @@
+---
+title: "Análise de Volatilidade Estocástica e Retornos Intradiários - PETR4"
+author: "Gustavo Vitor da Silva"
+format: html
+editor: visual
+---
+
+## Introdução
+
+Este relatório explora o comportamento da volatilidade e dos retornos da ação PETR4 ao longo de 2021, com dados de frequência de 1 minuto extraídos da plataforma MetaTrader. Utilizamos modelos de volatilidade estocástica via `stochvol`, comparações com volatilidade realizada, e examinamos propriedades de clustering de volatilidade.
+
+## Leitura e Pré-processamento dos Dados
+
+-   Remoção de janelas de abertura com menor liquidez (10:00 até 10:20) e dos últimos minutos de pregão (após 16:55).
+
+-   Exclusão do feriado em 17/02/2021.
+
+-   Conversão para série temporal (`xts`) e remoção de outliers extremos substituindo-os pela observação anterior
+
+```{r load-packages, include=FALSE}
+  library(ggplot2)
+  library(tidyr)
+  library(zoo)
+  library(xts)
+  library(forecast)
+  library(lubridate)
+  library(PerformanceAnalytics)
+  #library(highfrequency)         
+  library(quantmod)    
+  library(tseries)     
+  library(FinTS)       
+  library(stochvol)  
+  library(fpp2)     
+  library(fpp3)       
+  #library(modeltime)    
+  #library(timetk)      
+  library(parsnip)      
+  library(rsample)      
+  library(cowplot)
+  library(wavelets)
+  library(gridExtra)
+  library(broom)
+  library(rugarch) 
+  library(moments)  
+  library(coda)
+  library(ggplot2)
+  library(car)       
+  library(boot)
+```
+
+```{r}
+os <- Sys.info()["sysname"]
+if(os == "Windows") {
+  dt.intra <- read.csv("D:/Code/R_studio/Petr4_ana/dt_1min_PETR4_2021_metatrader.csv", 
+                       header = TRUE, stringsAsFactors = FALSE, 
+                       sep = ";", dec = ",")
+} else if(os == "Linux") {
+  dt.intra <- read.csv("~/Documents/Coding/Statistics_in_R/Petr4_ana/dt_1min_PETR4_2021_metatrader.csv", 
+                       header = TRUE, stringsAsFactors = FALSE, 
+                       sep = ";", dec = ",")
+}
+
+dt1 <- as_tibble(dt.intra) %>% 
+  mutate(Period = ymd_hms(X)) %>%
+  select(-X) %>% 
+  filter(!(hour(Period) == 10 & minute(Period) < 20)) %>% 
+  filter(hour(Period) < 17) %>% 
+  filter(!(hour(Period) == 16 & minute(Period) > 54)) %>% 
+  filter(!(date(Period) == "2021-02-17")) %>% 
+  arrange(Period)
+
+ret.1min <- as.xts(dt1$Ret.1min, order.by = dt1$Period)
+
+```
+
+## Observação inicial
+
+```{r}
+plot(dt1$Close.1min, main="PETR4 Retornos 1min", col="black")
+boxplot(as.double(ret.1min), main="Boxplot dos Retornos 1min")
+```
+
+## Testes de Estacionariedade
+
+```{r}
+tseries::adf.test(ret.1min)
+```
+
+Resultado mostra que os retornos são estacionários, o que é esperado para séries de retornos.
+
+## Analises de têndencias pré e pós queda
+
+```{r}
+  idx_min <- which.min(dt1$Ret.1min)
+
+  dados_xts <- xts(dt1[, c("Close.1min", "Ret.1min")], order.by = dt1$Period)
+
+  p2 = idx_min +10000
+```
+
+```{r}
+dados_xts$LogRet.1min <- log(1 + dados_xts$Ret.1min)
+dados_xts <- na.omit(dados_xts)
+
+calc_volatilidade_historica <- function(retornos, janela = 21) {
+  vol_hist <- rollapply(retornos, width = janela, 
+                        FUN = function(x) sd(x, na.rm = TRUE), 
+                        by.column = TRUE, 
+                        align = "right")
+  return(vol_hist)
+}
+
+dados_xts$Vol_Hist_30min <- calc_volatilidade_historica(dados_xts$LogRet.1min, janela = 30)
+
+minutos_ano <- 252 * 390
+dados_xts$Vol_Anual <- dados_xts$Vol_Hist_30min * sqrt(minutos_ano)
+
+volhist30min <- as.numeric(dados_xts$Vol_Hist_30min)
+
+plot(volhist30min[1:10000],
+     type = "l",
+     main = "Volatilidade (Janela 30 min) Pré-queda",
+     xlab = "Índice (observações)",
+     ylab = "Volatilidade")
+
+plot(volhist30min[idx_min:p2],
+     type = "l",
+     main = "Volatilidade (Janela 30 min) Pós-queda",
+     xlab = "Índice (observações)",
+     ylab = "Volatilidade")
+
+```
+
+```{r}
+warning=FALSE
+message=FALSE
+log_ret_vec <- as.numeric(dados_xts$LogRet.1min)
+ret_vec <- as.numeric(dados_xts$Ret.1min)
+
+
+# Visualizando ACF e PACF
+par(mfrow = c(1, 2))
+acf(log_ret_vec[1:10000], main = "ACF - Log-Retornos Pré queda", na.action = na.pass)
+pacf(log_ret_vec[1:10000], main = "PACF - Log-Retornos Pré queda", na.action = na.pass)
+
+p1=idx_min-2500
+p2=p1+10000
+par(mfrow = c(1, 2))
+acf(log_ret_vec[p1:p2], main = "ACF - Log-Retornos Pós queda", na.action = na.pass)
+pacf(log_ret_vec[p1:p2], main = "PACF - Log-Retornos Pós queda", na.action = na.pass)
+```
+
+## 1. Objetivos
+
+Comparação das as funções de autocorrelação (ACF) e autocorrelação parcial (PACF) dos log-retornos intradiários de PETR4 **antes** e **depois** de uma queda da opção.
+
+## Ajuste do Modelo de Volatilidade Estocástica
+
+Ajustamos um modelo `svsample()` a dois blocos temporais:
+
+1.  Primeiros 10000 pontos antes do maior retorno absoluto negativo.
+2.  10000 pontos após o menor retorno (queda abrupta) para comparar regimes.
+3.  15000 pontos após analise anterior 10000 mil pontos são analisados para observar a recuperação do mercado a uma queda bruta.
+
+```{r, include=FALSE}
+
+echo=FALSE
+warning=FALSE
+message=FALSE
+
+
+flag_file <- "compressed.txt"
+
+if (file.exists(flag_file)) {
+
+  file_sv1  <- "sv_fit.rds"
+  file_sv2  <- "sv_fit2.rds"
+  file_sv3  <- "sv_fit3.rds"
+  
+  sv_fit  <- readRDS(file_sv1)
+  sv_fit2 <- readRDS(file_sv2)
+  sv_fit3 <- readRDS(file_sv3)
+  
+} else {
+
+  reduce_and_save <- function(obj, file_out, max_draws = 2000, keep_sample_of_vector = 50, thin_method = c("systematic", "random")) {
+    thin_method <- match.arg(thin_method)
+    orig_class <- class(obj)
+    reduction_log <- list()
+    
+    thin_rows <- function(mat, max_rows) {
+      nr <- nrow(mat)
+      if (nr > max_rows) {
+        if (thin_method == "systematic") {
+          idx <- unique(round(seq(1, nr, length.out = max_rows)))
+        } else {
+          set.seed(1)
+          idx <- sort(sample(nr, size = max_rows))
+        }
+        return(list(mat = mat[idx, , drop = FALSE], kept = length(idx), original = nr))
+      } else {
+        return(list(mat = mat, kept = nr, original = nr))
+      }
+    }
+    
+
+    for (nm in names(obj)) {
+      comp <- obj[[nm]]
+      if (is.matrix(comp) || is.data.frame(comp)) {
+        if (is.numeric(as.matrix(comp))) {
+          res <- thin_rows(as.matrix(comp), max_draws)
+          obj[[nm]] <- res$mat
+          reduction_log[[nm]] <- list(type = "matrix/data.frame",
+                                      original_rows = res$original,
+                                      kept_rows = res$kept)
+        } else {
+
+          reduction_log[[nm]] <- list(type = "matrix_non_numeric_kept")
+        }
+      } else if (is.array(comp) && length(dim(comp)) >= 2 && is.numeric(comp)) {
+        dims <- dim(comp)
+        nfirst <- dims[1]
+        if (nfirst > max_draws) {
+          if (thin_method == "systematic") {
+            idx <- unique(round(seq(1, nfirst, length.out = max_draws)))
+          } else {
+            set.seed(1)
+            idx <- sort(sample(nfirst, size = max_draws))
+          }
+          sel <- rep(list(bquote()), length(dims))
+          sel[[1]] <- idx
+          new_comp <- comp[idx,,, drop = FALSE]
+          obj[[nm]] <- new_comp
+          reduction_log[[nm]] <- list(type = "array_thinned",
+                                      dim_original = dims,
+                                      dim_kept = dim(new_comp))
+        } else {
+          reduction_log[[nm]] <- list(type = "array_kept", dim = dims)
+        }
+      } else if (is.list(comp)) {
+        sublog <- list()
+        for (subnm in names(comp)) {
+          subc <- comp[[subnm]]
+          if (is.matrix(subc) || (is.array(subc) && length(dim(subc)) >= 2 && is.numeric(subc))) {
+            dims <- if (is.matrix(subc)) dim(subc) else dim(subc)
+            nfirst <- if (is.matrix(subc)) nrow(subc) else dims[1]
+            if (nfirst > max_draws && is.numeric(subc)) {
+              if (thin_method == "systematic") {
+                idx <- unique(round(seq(1, nfirst, length.out = max_draws)))
+              } else {
+                set.seed(1)
+                idx <- sort(sample(nfirst, size = max_draws))
+              }
+              if (is.matrix(subc)) {
+                comp[[subnm]] <- subc[idx, , drop = FALSE]
+              } else {
+                comp[[subnm]] <- subc[idx,,, drop = FALSE]
+              }
+              sublog[[subnm]] <- list(action = "thinned", original_first_dim = nfirst, kept = length(idx))
+            } else {
+              sublog[[subnm]] <- list(action = "kept", dim = dims)
+            }
+          } else if (is.numeric(subc) && length(subc) > 10000) {
+            set.seed(1)
+            samp <- sample(length(subc), size = min(keep_sample_of_vector, length(subc)))
+            comp[[subnm]] <- list(sample = subc[samp],
+                                  summary = c(mean = mean(subc), sd = sd(subc), median = median(subc),
+                                              q025 = quantile(subc, 0.025), q975 = quantile(subc, 0.975)))
+            sublog[[subnm]] <- list(action = "vector_summarised_and_sampled", original_length = length(subc),
+                                    kept_sample = length(samp))
+          } else {
+            sublog[[subnm]] <- list(action = "left_as_is")
+          }
+        }
+        obj[[nm]] <- comp
+        reduction_log[[nm]] <- list(type = "list", details = sublog)
+      } else if (is.numeric(comp) && length(comp) > 50000) {
+        set.seed(1)
+        samp_idx <- sample(length(comp), size = min(keep_sample_of_vector, length(comp)))
+        obj[[nm]] <- list(sample = comp[samp_idx],
+                          summary = c(mean = mean(comp), sd = sd(comp), median = median(comp),
+                                      q025 = quantile(comp, 0.025), q975 = quantile(comp, 0.975)))
+        reduction_log[[nm]] <- list(type = "big_vector_summarised", original_length = length(comp),
+                                    kept_sample = length(samp_idx))
+      } else {
+        reduction_log[[nm]] <- list(type = "kept_as_is")
+      }
+    }
+    
+    attr(obj, "reduced_info") <- list(
+      timestamp = Sys.time(),
+      max_draws = max_draws,
+      thin_method = thin_method,
+      keep_sample_of_vector = keep_sample_of_vector,
+      reduction_log = reduction_log
+    )
+    class(obj) <- orig_class
+    
+    saveRDS(obj, file = file_out, compress = "xz")
+    
+    return(obj)
+  }
+
+  set.seed(123)
+  ret_vec <- as.numeric(ret.1min[1:10000])
+  
+  file_sv1 <- "sv_fit.rds"
+  if (file.exists(file_sv1)) {
+    sv_fit_raw <- readRDS(file_sv1)
+    sv_fit <- reduce_and_save(sv_fit_raw, file_out = file_sv1, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit_raw <- svsample(ret_vec, draws = 5000, burnin = 1000)
+    sv_fit <- reduce_and_save(sv_fit_raw, file_out = file_sv1, max_draws = 2000, thin_method = "systematic")
+  }
+
+  idx_max <- which.max(dt1$Ret.1min)
+  min_idx <- idx_max - 2500
+  max_idx <- idx_max + 7500
+  ret_vec2 <- as.numeric(ret.1min[min_idx:max_idx])
+  
+  file_sv2 <- "sv_fit2.rds"
+  if (file.exists(file_sv2)) {
+    sv_fit2_raw <- readRDS(file_sv2)
+    sv_fit2 <- reduce_and_save(sv_fit2_raw, file_out = file_sv2, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit2_raw <- svsample(ret_vec2, draws = 5000, burnin = 1000)
+    sv_fit2 <- reduce_and_save(sv_fit2_raw, file_out = file_sv2, max_draws = 2000, thin_method = "systematic")
+  }
+  
+  min2 <- max_idx + 12000
+  max2 <- min2 + 10000
+  ret_vec3 <- as.numeric(ret.1min[min2:max2])
+  
+  file_sv3 <- "sv_fit3.rds"
+  if (file.exists(file_sv3)) {
+    sv_fit3_raw <- readRDS(file_sv3)
+    sv_fit3 <- reduce_and_save(sv_fit3_raw, file_out = file_sv3, max_draws = 2000, thin_method = "systematic")
+  } else {
+    sv_fit3_raw <- svsample(ret_vec3, draws = 5000, burnin = 1000)
+    sv_fit3 <- reduce_and_save(sv_fit3_raw, file_out = file_sv3, max_draws = 2000, thin_method = "systematic")
+  }
+  file.create(flag_file)
+
+}
+
+```
+
+```{r}
+plot(sv_fit, showobs = FALSE)
+title(main = "Pré queda")
+plot(sv_fit2, showobs = FALSE)
+title(main = "Pós queda")
+plot(sv_fit3, showobs = FALSE)
+title(main = "Recuperação Pós queda")
+```
+
+Analisando os dados pós e pré queda da bolsa podemos ver uma mudança principalmente nas distribuições normais de Mu, Phi e Sigma, onde podemos definir o que cada variavel nos diz como:
+
+### Interpretação de μ (mu)
+
+1.  **Média de longo prazo**
+
+    -   **μ** define o valor médio ao qual Log-volatilidade reverte em longo prazo.
+
+    -   Processos com μ maior indicam que, em média, a volatilidade tende a ficar mais elevada.
+
+2.  **“Drift” da volatilidade latente**
+
+    -   Atua como termo constante que “puxa” o nível de volatilidade de volta ao seu ponto de equilíbrio
+
+    -   Ao estimar o modelo, a média pontual de μ na distribuição posterior corresponde à média aritmética.
+
+### Interpretação de φ (phi)
+
+1.  **Persistência (autoregressão)**
+
+    -   **φ** atua como coeficiente AR(1) medindo a “memória” da volatilidade.
+
+    -   Se φ≈1, choques em ht−1 têm efeito duradouro​, resultando em **clusters de volatilidade**.
+
+    **Estacionaridade**
+
+    -   O modelo é estacionário somente se ∣ϕ∣\<1; valores absolutos acima quebram a estabilidade do processo latente.
+
+    -   Estimações típicas em mercados emergentes mostram φ entre 0.95 e 0.99, indicando alta persistência.
+
+### Interpretação de σ (sigma)
+
+1.  **Volatilidade da volatilidade**
+
+    -   **σ** é o desvio-padrão dos choques que afetam o processo de log-volatilidade
+
+    -   Quanto maior σ, mais pronunciadas são as flutuações de curto prazo na volatilidade.
+
+2.  **Incerteza dinâmica**
+
+    -   Reflete a variabilidade intrínseca na evolução da volatilidade latente, controlando a rapidez das mudanças de regimes.
+
+    -   Modelos com σ elevado tendem a capturar melhor eventos extremos (*fat tails*) e mudanças bruscas no risco.
+
+### O que podemos retirar das nossas observações
+
+Em particular, **μ** é a média de longo prazo da log-volatilidade, **φ** mede a persistência ou “memória” do processo, e **σ** quantifica a volatilidade da própria volatilidade.
+
+------------------------------------------------------------------------
+
+## Valores Estimados
+
+| Regime          | μ     | φ    | σ    |
+|-----------------|-------|------|------|
+| **Pré-queda**   | –13.8 | 0.97 | 0.16 |
+| **Pós-queda**   | –13.3 | 0.99 | 0.12 |
+| **Recuperação** | –14.4 | 0.98 | 0.11 |
+
+------------------------------------------------------------------------
+
+## Interpretação dos Parâmetros
+
+### 1. μ — Nível Médio de Longo Prazo
+
+-   **Pré-queda (μ ≃ –13.8):** Nível médio moderado de log-volatilidade, indicando um mercado relativamente estável antes do choque.\
+-   **Pós-queda (μ ≃ –13.3):** Aumento em μ sinaliza que a volatilidade média se elevou após o choque, refletindo comportamento mais errático e risco incrementado.\
+-   **Recuperação (μ ≃ –14.4):** μ abaixo do nível pré-queda sugere um período de calmaria, com volatilidade média inferior ao patamar inicial
+
+### 2. φ — Persistência (AR(1))
+
+-   **Pré-queda (φ ≃ 0.97):** Choques de volatilidade perduram vários minutos, caracterizando clusters de volatilidade típicos em séries financeiras.\
+-   **Pós-queda (φ ≃ 0.99):** Persistência extrema, indicando que o impacto do choque permanece durante longo período e reduz a capacidade de “esquecer” choques passados.\
+-   **Recuperação (φ ≃ 0.98):** Alta persistência, porém ligeiramente menor que no pós-queda, sinalizando retorno gradual a um regime menos grudado em choques passados.
+
+### 3. σ — Volatilidade da Volatilidade
+
+-   **Pré-queda (σ ≃ 0.16):** Flutuações bruscas no nível latente de volatilidade, revelando instabilidade moderada na variância do processo.\
+-   **Pós-queda (σ ≃ 0.12):** Apesar do regime mais volátil, a dispersão das mudanças na volatilidade latente diminui, indicando choques relativamente menos extremos no pós-queda.\
+-   **Recuperação (σ ≃ 0.11):** Processo de volatilidade ainda mais estável, com menor amplitude de flutuações, corroborando o retorno a um regime de baixa incerteza.
+
+## Comparação de volatilidades
+
+Criaremos o mesmo segmento utilizados acima como:
+
+**Segmento A:** Valores de 1 a 10000 observações antes da queda brusca.
+
+**Segmento B:** valores de 11600 a 22600 (2000 valores antes da queda e a queda em si).
+
+**Segmento C:** valores de 33600 a 43600 observando a volatilidade do mercado semanas após a queda.
+
+Iremos comparar a volatilidade realizada desses pontos para entender como era uma função pré, durante e pós uma queda brusca no mercado.
+
+# Volatilidade realizada acumulada nos periodos
+
+```{r}
+rets <- dt1$Ret.1min
+segments <- list(
+  pré = 1:10000,
+  pós = 12273:22273,
+  recov = 34273:44600
+)
+vol_list <- lapply(names(segments), function(seg_name) {
+  idx <- segments[[seg_name]]
+  r_seg <- rets[idx]
+  vol_acum <- sqrt(cumsum(r_seg^2))
+  data.frame(
+    index   = idx,
+    vol     = vol_acum,
+    segment = seg_name
+  )
+})
+df_vol <- bind_rows(vol_list)
+ggplot(df_vol, aes(x = index, y = vol, color = segment)) +
+  geom_line() +
+  labs(
+    title    = "Volatilidade Acumulada por Segmento de Índices",
+    x        = "Índice",
+    y        = "Volatilidade Acumulada",
+    color    = "Periodos"
+  ) +
+  theme_minimal()
+```
+
+O bloco calcula a volatilidade acumulada em três segmentos do índice (pré, pós e recuperação) usando ∑rt2\sqrt{\sum r_t^2}∑rt2​​ ao longo de cada segmento e plota as três curvas em um único gráfico (eixo x = índice/observação, eixo y = volatilidade acumulada).
+
+**Interpretação aplicada (o que a figura mostra)**
+
+-   A curva do **segmento pós-queda** cresce muito mais rápido: isto significa que, no segmento que contém a queda, a variância realizada se acumula bem mais rápido por observação — reflexo de movimentos intradiários abruptos.
+
+-   O **pré-queda** mostra crescimento de volatilidade moderado e mais estável.
+
+-   A **recuperação** acumula volatilidade mais lentamente (menor acumulação total no intervalo), indicando retorno a um regime menos volátil.
+
+Em termos práticos: o episódio de queda concentra choque(s) grandes que elevam de forma pronunciada a variância acumulada — comportamento consistente com stress de mercado.
+
+# Vizualização de divisão de Periodos (tabela e interpretação)
+
+```{r}
+price_col <- "Close.1min" 
+
+if(!(price_col %in% names(dt1))) stop("dt1 não contém a coluna de preço especificada (Close.1min).")
+
+segments_idx <- list(
+  pre   = c(start = 1,       end = 10000),
+  post  = c(start = 12273,   end = 22273),
+  recov = c(start = 34273,   end = 44600)
+)
+
+segments_df_idx <- lapply(names(segments_idx), function(name) {
+  idx <- segments_idx[[name]]
+  tibble::tibble(
+    segment = name,
+    xmin = as.numeric(idx["start"]) - 0.5,  # pequeno padding para cobrir o tick inteiro
+    xmax = as.numeric(idx["end"]) + 0.5
+  )
+}) %>% bind_rows() %>%
+  mutate(label = case_when(
+    segment == "pre"   ~ "Pré-queda",
+    segment == "post"  ~ "Pós-queda",
+    segment == "recov" ~ "Recuperação",
+    TRUE ~ segment
+  ))
+
+plot_df_idx <- dt1 %>%
+  select(all_of(price_col)) %>%
+  mutate(index = seq_len(n())) %>%
+  rename(price = !!price_col)
+
+fill_colors <- c("Pré-queda" = "#E8fA22", "Pós-queda" = "#FC886D", "Recuperação" = "#6DD6FC")
+
+p_idx <- ggplot(plot_df_idx, aes(x = index, y = price)) +
+  geom_rect(data = segments_df_idx,
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = label),
+            inherit.aes = FALSE, alpha = 0.28) +
+  geom_line(color = "black", size = 0.35) +
+  geom_vline(data = segments_df_idx, aes(xintercept = xmin + 0.5),
+             linetype = "dashed", color = "black", size = 0.45, inherit.aes = FALSE, show.legend = FALSE) +
+  geom_vline(data = segments_df_idx, aes(xintercept = xmax - 0.5),
+             linetype = "dashed", color = "black", size = 0.45, inherit.aes = FALSE, show.legend = FALSE) +
+  scale_fill_manual(name = "Segmento", values = fill_colors) +
+  labs(
+    title = "Preço de Fechamento — segmentos destacados (por índice)",
+    subtitle = "Eixo x = índice (linha do dataset); regiões sombreadas = Pré / Pós / Recuperação",
+    x = "Índice (observação)",
+    y = "Preço de Fechamento"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(size = 10),
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 0)
+  ) +
+  coord_cartesian(expand = FALSE)
+
+idx_breaks <- unique(c(
+  1,
+  unlist(lapply(segments_idx, function(x) c(x["start"], x["end"]))),
+  floor(nrow(plot_df_idx) * c(0.25, 0.5, 0.75)),
+  nrow(plot_df_idx)
+))
+idx_breaks <- sort(unique(idx_breaks))
+p_idx <- p_idx + scale_x_continuous(breaks = idx_breaks, labels = idx_breaks)
+
+print(p_idx)
+```
+
+O bloco plota a série de preços (coluna `Close.1min`) ao longo do índice/observação e sobrepõe três regiões sombreadas (pré-queda, pós-queda, recuperação) usando retângulos (`geom_rect`). Linhas tracejadas marcam inícios/fins das regiões.
+
+**Interpretação aplicada**
+
+-   A região **Pré-queda** (amarelo) mostra preços relativamente estáveis e, em média, em patamar mais alto antes do choque.
+
+-   Na região **Pós-queda** (salmão) observa-se a queda brusca e a subsequente estabilização em patamar mais baixo (além de maior ruído intradiário).
+
+-   A região **Recuperação** (azul claro) mostra um movimento de recuperação de preço e menor acumulação rápida de volatilidade do que no choque.
+
+Colocar os segmentos por índice (e não por tempo real) facilita cruzar diretamente com as métricas calculadas (RV, BV, estimativas do modelo).
+
+# Realized Variance, Bipower, Jump, Volatilidade anualizada e testes (tabela e interpretação)
+
+```{r}
+calc_RV <- function(r) {
+  rv <- sum((r)^2, na.rm = TRUE)
+  return(rv)
+}
+
+calc_BV <- function(r) {
+  if(length(r) < 2) return(NA_real_)
+  bv_raw <- sum(abs(r[-1]) * abs(r[-length(r)]), na.rm = TRUE)
+  bv <- (pi/2)^(-1) * bv_raw
+  return(bv)
+}
+
+calc_jump_share <- function(r) {
+  rv <- calc_RV(r)
+  bv <- calc_BV(r)
+  jump = max(rv - bv, 0)
+  return(list(RV = rv, BV = bv, Jump = jump, JumpShare = ifelse(rv>0, jump/rv, NA)))
+}
+
+
+summary_stats <- function(r) {
+  r <- as.numeric(na.omit(r))
+  n <- length(r)
+  list(
+    n = n,
+    mean = mean(r),
+    sd = sd(r),
+    median_abs_dev = mad(r),
+    skewness = moments::skewness(r),
+    kurtosis = moments::kurtosis(r)
+  )
+}
+
+minutos_ano <- 252 * 390  
+annualize_vol_from_rv <- function(rv, n_obs) {
+  if(n_obs <= 0) return(NA_real_)
+  vol_ann <- sqrt(rv / n_obs) * sqrt(minutos_ano)
+  return(vol_ann)
+}
+
+
+bootstrap_RV <- function(r, R = 2000) {
+  r <- na.omit(as.numeric(r))
+  n <- length(r)
+  if(n < 5) return(NULL)
+  bootstat <- function(data, i) {
+    d <- data[i]
+    sum(d^2)
+  }
+  b <- boot::boot(data = r, statistic = bootstat, R = R)
+  ci <- boot::boot.ci(b, type = c("perc","bca"))
+  list(boot = b, ci = ci)
+}
+
+perm_test_RV_diff <- function(r1, r2, R = 2000) {
+  r1 <- na.omit(as.numeric(r1))
+  r2 <- na.omit(as.numeric(r2))
+  obs_diff <- calc_RV(r2) - calc_RV(r1)     
+  pooled <- c(r1, r2)
+  n1 <- length(r1)
+  n2 <- length(r2)
+  perm_diffs <- numeric(R)
+  set.seed(123)
+  for(i in seq_len(R)) {
+    perm <- sample(pooled)
+    perm_diffs[i] <- calc_RV(perm[(n1+1):(n1+n2)]) - calc_RV(perm[1:n1])
+  }
+  p_value <- mean(abs(perm_diffs) >= abs(obs_diff))
+  list(obs_diff = obs_diff, p_value = p_value, perm_diffs = perm_diffs)
+}
+
+
+segments <- list(A = 1:10000, B = 11600:21600, C = 33600:43600)
+rets <- dt1$Ret.1min
+
+calc_for_segment <- function(name, idx, rets) {
+  r_seg <- as.numeric(rets[idx])
+  rv <- calc_RV(r_seg)
+  bv <- calc_BV(r_seg)
+  jump <- max(rv - bv, 0)
+  jumpshare <- ifelse(rv>0, jump / rv, NA_real_)
+  n_obs <- length(na.omit(r_seg))
+  vol_ann <- annualize_vol_from_rv(rv, n_obs)
+  stats <- summary_stats(r_seg)
+  bs <- bootstrap_RV(r_seg, R = 2000)
+  list(
+    name = name,
+    n = n_obs,
+    RV = rv,
+    BV = bv,
+    Jump = jump,
+    JumpShare = jumpshare,
+    VolAnn = vol_ann,
+    mean = stats$mean,
+    sd = stats$sd,
+    skewness = stats$skewness,
+    kurtosis = stats$kurtosis,
+    boot = bs
+  )
+}
+
+seg_names <- names(segments)
+results <- lapply(seg_names, function(sn) calc_for_segment(sn, segments[[sn]], rets))
+names(results) <- seg_names
+
+summary_table <- do.call(rbind, lapply(results, function(x) {
+  data.frame(
+    segment = x$name,
+    n = x$n,
+    RV = x$RV,
+    BV = x$BV,
+    Jump = x$Jump,
+    JumpShare = x$JumpShare,
+    VolAnn = x$VolAnn,
+    mean = x$mean,
+    sd = x$sd,
+    skewness = x$skewness,
+    kurtosis = x$kurtosis
+  )
+}))
+print(summary_table)
+
+
+pairwise_compare <- function(x, y) {
+  abs_diff <- x - y
+  pct_diff <- ifelse(y != 0, (x - y) / abs(y) * 100, NA_real_)
+  list(abs_diff = abs_diff, pct_diff = pct_diff)
+}
+
+diff_BA <- pairwise_compare(results$B$RV, results$A$RV)
+diff_CA <- pairwise_compare(results$C$RV, results$A$RV)
+cat("RV differences (B - A):", diff_BA$abs_diff, "(", round(diff_BA$pct_diff,2), "% )\n")
+cat("RV differences (C - A):", diff_CA$abs_diff, "(", round(diff_CA$pct_diff,2), "% )\n")
+
+perm_BA <- perm_test_RV_diff(rets[segments$A], rets[segments$B], R = 3000)
+perm_CA <- perm_test_RV_diff(rets[segments$A], rets[segments$C], R = 3000)
+cat("Perm test p-value B vs A:", perm_BA$p_value, "\n")
+cat("Perm test p-value C vs A:", perm_CA$p_value, "\n")
+
+combined <- data.frame(
+  ret = c(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]), as.numeric(rets[segments$C])),
+  seg = factor(c(rep("A", length(segments$A)), rep("B", length(segments$B)), rep("C", length(segments$C))))
+)
+levene_res <- car::leveneTest(ret ~ seg, data = combined)
+print(levene_res)
+
+ks_AB <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$B]))
+ks_AC <- ks.test(as.numeric(rets[segments$A]), as.numeric(rets[segments$C]))
+print(ks_AB)
+print(ks_AC)
+
+final_df <- summary_table %>%
+  as.data.frame() %>%
+  mutate(
+    VolAnn_rounded = round(VolAnn, 4),
+    JumpShare_pct = round(JumpShare * 100, 2)
+  )
+print(final_df)
+```
+
+**Descrição do que o código faz**\
+Calcula para três segmentos (A = pré; B = pós; C = recov):
+
+RV (Realized Variance) = ∑ 𝑟 𝑡 2 ∑r t 2 ​
+
+BV (Bipower Variation) ≈ ( 𝜋 / 2 ) − 1 ∑ ∣ 𝑟 𝑡 ∣ ∣ 𝑟 𝑡 − 1 ∣ (π/2) −1 ∑∣r t ​∣∣r t−1 ​∣
+
+Jump = max(RV − BV, 0) e JumpShare = Jump / RV
+
+Volatilidade anualizada aproximada a partir do RV: RV/n×minutos_ano\sqrt{RV/n}\times\sqrt{\text{minutos\_ano}}RV/n​×minutos_ano​ com `minutos_ano = 252 * 390`
+
+Estatísticas descritivas dos retornos (média, sd, skewness, kurtosis)
+
+Testes: permutacional para diferença em RV entre segmentos, Levene para homogeneidade de variâncias e KS para comparação de distribuições
+
+## Resumo numérico por segmento
+
+| Segmento  |     n |         RV |         BV |       Jump | JumpShare | VolAnn (≈) |
+|:----------|------:|-----------:|-----------:|-----------:|----------:|-----------:|
+| A (pre)   | 10000 | 0.01172629 | 0.00450615 | 0.00722014 | 0.6157224 |  0.3394790 |
+| B (post)  | 10001 | 0.02118279 | 0.00813359 | 0.01304920 | 0.6160284 |  0.4562495 |
+| C (recov) | 10001 | 0.00585110 | 0.00221385 | 0.00363725 | 0.6216353 |  0.2397892 |
+
+**Interpretação numérica**
+
+-   **RV** no **pós-queda (B)** é a mais alta (≈ 0.02118), \~1.8× a do pré (A = 0.0117) e muito maior que a da recuperação (C = 0.00585).
+
+-   **Volatilidade anualizada aproximada**: pré ≈ **0.3395**, pós ≈ **0.4563**, recov ≈ **0.2398**. O pós mostra aumento consistente com maior risco médio naquele período.
+
+-   **JumpShare ≈ 61–62%** em todos os segmentos: uma parcela substancial da variância é explicada por componentes de salto (movimentos bruscos), inclusive no pré e na recuperação.
+
+**Conclusão**: o episódio de queda eleva fortemente a variância realizada; na recuperação a volatilidade realizada retoma e fica até inferior ao pré-queda.
+
+## Resultados do modelo `stochvol`
+
+**Tabela parâmetros estimados (médias posteriores)**
+
+| Regime |  μ (mean) | φ (mean) | σ (mean) |
+|:-------|----------:|---------:|---------:|
+| pré    | -13.80814 |  0.96898 |  0.16164 |
+| pós    | -13.33636 |  0.98799 |  0.11441 |
+| recov  |   ≈ -14.4 |     0.98 |     0.11 |
+
+**Resumo da volatilidade anualizada posterior (estatísticas de resumo)**
+
+| regime |    mean |  median |      sd |    q2.5 |   q97.5 |
+|:-------|--------:|--------:|--------:|--------:|--------:|
+| pre    | 0.35156 | 0.35152 | 0.00313 | 0.34553 | 0.35782 |
+| post   | 0.46028 | 0.46015 | 0.00430 | 0.45221 | 0.46912 |
+| recov  | 0.26128 | 0.26127 | 0.00218 | 0.25702 | 0.26553 |
+
+**Comparações e probabilidades posteriores**
+
+-   `post − pre`: média ≈ **+0.10872**, prob(\>0) ≈ **1.00** → forte evidência posterior de que volatilidade anualizada no pós é maior que no pré.
+
+-   `recov − pre`: média ≈ **−0.09028**, prob(\>0) ≈ **0.00** → evidência posterior de que recuperação tem volatilidade menor que pré.
+
+**Interpretação combinada (modelo + realizados)**
+
+`μ` menos negativo no pós (aumento do nível de log-vol) e `φ` mais alto indicam um regime de volatilidade **mais alto e mais persistente** após o choque. `σ` menor sugere choques na log-volatilidade com menor dispersão (regime “alto e pegajoso”). Esses resultados alinham-se com RV e VolAnn observados.
+
+```{r}
+minutos_ano <- 252 * 390
+
+get_para_mat <- function(svobj) {
+  pm <- as.matrix(para(svobj, chain = "concatenated"))
+  return(pm)
+}
+get_latent_mat <- function(svobj) {
+  lm <- as.matrix(latent(svobj, chain = "concatenated"))
+  return(lm)
+}
+
+para1 <- get_para_mat(sv_fit)
+para2 <- get_para_mat(sv_fit2)
+para3 <- get_para_mat(sv_fit3)
+
+latent1 <- get_latent_mat(sv_fit)  
+latent2 <- get_latent_mat(sv_fit2)
+latent3 <- get_latent_mat(sv_fit3)
+
+n1 <- nrow(para1); n2 <- nrow(para2); n3 <- nrow(para3)
+common_draws <- min(n1, n2, n3)
+
+set.seed(1)
+sample_rows <- function(mat, n) {
+  if(nrow(mat) == n) return(mat)
+  idx <- sample(seq_len(nrow(mat)), n)
+  mat[idx, , drop = FALSE]
+}
+para1s <- sample_rows(para1, common_draws)
+para2s <- sample_rows(para2, common_draws)
+para3s <- sample_rows(para3, common_draws)
+latent1s <- sample_rows(latent1, common_draws)
+latent2s <- sample_rows(latent2, common_draws)
+latent3s <- sample_rows(latent3, common_draws)
+
+summ_param <- function(parmat) {
+  as.data.frame(t(apply(parmat, 2, function(x) {
+    c(mean = mean(x), sd = sd(x), 
+      q2.5 = quantile(x, 0.025), q97.5 = quantile(x, 0.975))
+  })), row.names = NULL)
+}
+tab_para1 <- summ_param(para1s)
+tab_para2 <- summ_param(para2s)
+tab_para3 <- summ_param(para3s)
+
+tab_para <- dplyr::bind_rows(
+  cbind(regime = "pre",  param = rownames(tab_para1), tab_para1),
+  cbind(regime = "post", param = rownames(tab_para2), tab_para2),
+  cbind(regime = "recov", param = rownames(tab_para3), tab_para3)
+)
+print(tab_para)
+
+param_diff <- function(matA, matB, parname) {
+  diffs <- matB[, parname] - matA[, parname]
+  data.frame(
+    mean = mean(diffs),
+    sd   = sd(diffs),
+    q2.5 = quantile(diffs, 0.025),
+    q97.5= quantile(diffs, 0.975),
+    prob_gt0 = mean(diffs > 0)  
+  )
+}
+
+diff_mu_post_pre  <- param_diff(para1s, para2s, "mu")
+diff_phi_post_pre <- param_diff(para1s, para2s, "phi")
+diff_sigma_post_pre <- param_diff(para1s, para2s, "sigma")
+
+
+print(diff_mu_post_pre); print(diff_phi_post_pre); print(diff_sigma_post_pre)
+per_draw_mean_variance <- function(latmat) {
+  rowMeans(exp(latmat), na.rm = TRUE)   
+}
+per_draw_mean_sd <- function(latmat) {
+  sqrt(per_draw_mean_variance(latmat))
+}
+per_draw_ann_vol <- function(latmat) {
+  per_draw_mean_sd(latmat) * sqrt(minutos_ano)
+}
+
+v1 <- per_draw_mean_variance(latent1s)
+v2 <- per_draw_mean_variance(latent2s)
+v3 <- per_draw_mean_variance(latent3s)
+
+sd1 <- sqrt(v1); sd2 <- sqrt(v2); sd3 <- sqrt(v3)
+ann1 <- sd1 * sqrt(minutos_ano)
+ann2 <- sd2 * sqrt(minutos_ano)
+ann3 <- sd3 * sqrt(minutos_ano)
+
+summarize_draws <- function(vec) {
+  c(mean = mean(vec), median = median(vec), sd = sd(vec),
+    q2.5 = quantile(vec, 0.025), q97.5 = quantile(vec, 0.975))
+}
+tab_vol <- rbind(
+  pre  = summarize_draws(ann1),
+  post = summarize_draws(ann2),
+  recov= summarize_draws(ann3)
+)
+tab_vol <- as.data.frame(tab_vol)
+tab_vol$regime <- rownames(tab_vol)
+tab_vol <- tab_vol[, c("regime", names(tab_vol)[1:(ncol(tab_vol)-1)])]
+print(tab_vol)
+
+diff_ann_post_pre <- ann2 - ann1  
+diff_ann_recov_pre <- ann3 - ann1
+
+comp_ann <- data.frame(
+  mean = c(mean(diff_ann_post_pre), mean(diff_ann_recov_pre)),
+  sd   = c(sd(diff_ann_post_pre), sd(diff_ann_recov_pre)),
+  q2.5 = c(quantile(diff_ann_post_pre, 0.025), quantile(diff_ann_recov_pre, 0.025)),
+  q97.5= c(quantile(diff_ann_post_pre, 0.975), quantile(diff_ann_recov_pre, 0.975)),
+  prob_gt0 = c(mean(diff_ann_post_pre > 0), mean(diff_ann_recov_pre > 0))
+)
+rownames(comp_ann) <- c("post - pre", "recov - pre")
+print(comp_ann)
+
+df_plot <- data.frame(
+  ann = c(ann1, ann2, ann3),
+  regime = factor(rep(c("pre","post","recov"),
+                      times = c(length(ann1), length(ann2), length(ann3))))
+)
+p <- ggplot(df_plot, aes(x = ann, fill = regime)) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Posterior densities of per-segment annualized volatility",
+       x = "Annualized volatility (approx)", y = "Density") +
+  theme_minimal()
+print(p)
+
+prob_post_gt_pre <- mean(ann2 > ann1)
+prob_recov_gt_pre <- mean(ann3 > ann1)
+cat(sprintf("Posterior prob(ann_post > ann_pre) = %.3f\n", prob_post_gt_pre))
+cat(sprintf("Posterior prob(ann_recov > ann_pre) = %.3f\n", prob_recov_gt_pre))
+
+median_vol1_t <- apply(exp(latent1s), 2, median)   
+sd_median1_t <- sqrt(median_vol1_t)
+```
+
+## Volatilidade acumulada por segmento comparação pré / pós / recuperação
+
+#### O que o gráfico mostra
+
+Cada curva representa a **volatilidade acumulada** (raiz da soma dos quadrados) ao longo do índice dentro de cada segmento.
+
+**Visualmente:** - A curva do **pós-queda (vermelho)** cresce mais rapidamente — ou seja, acumula mais variância por observação. - O **pré-queda (verde)** apresenta crescimento mais moderado. - A **recuperação (azul)** cresce mais lentamente — menor acúmulo de variação.
+
+**Interpretação prática:**\
+Durante o segmento que contém a queda (B), houve **concentração de choques grandes**, elevando rapidamente a variância acumulada.\
+Isso condiz com um episódio de **alta volatilidade ou stress** no mercado.
+
+### Compilação numérica — Realized / BV / Jump / Volatilidade anualizada (código 3)
+
+| Segmento  |     n |         RV |         BV |       Jump | JumpShare | VolAnn (≈) |
+|:----------|------:|-----------:|-----------:|-----------:|----------:|-----------:|
+| A (pre)   | 10000 | 0.01172629 | 0.00450615 | 0.00722014 |    0.6157 |    0.33948 |
+| B (post)  | 10001 | 0.02118279 | 0.00813359 | 0.01304920 |    0.6160 |    0.45625 |
+| C (recov) | 10001 | 0.00585110 | 0.00221385 | 0.00363725 |    0.6216 |    0.23979 |
+
+#### Interpretação
+
+-   **RV (Realized Variance)**: o segmento pós-queda (B) tem RV ≈ 0.02118, cerca de **1.8× o RV do pré** (0.0117) e muito maior que o da recuperação (0.00585).\
+-   **Volatilidade anualizada**:
+    -   pré ≈ 0.3395\
+    -   pós ≈ 0.4563\
+    -   recov ≈ 0.2398\
+-   Diferença média `post − pre ≈ +0.1087` → **aumento ≈ +31%** em relação ao pré.\
+-   **JumpShare ≈ 61–62%** em todos os segmentos → movimentos bruscos (saltos) explicam mais de **60% da variância realizada**, inclusive no pré e na recuperação.
+
+**Conclusão numérica:**\
+O episódio de queda elevou fortemente a variância realizada no segmento B;\
+na recuperação, a volatilidade caiu **abaixo do nível pré-queda**.
+
+### Testes estatísticos
+
+Foram realizados **testes permutacionais** para comparar `RV` entre segmentos e **testes de Levene / Kolmogorov–Smirnov** sobre os retornos.\
+Esses testes verificam se as diferenças de `RV` e de distribuição são **estatisticamente significativas**.\
+Os p-values devem ser mantidos no relatório final para suporte às conclusões.
+
+### Compilação dos resultados do modelo `stochvol` (código 4)
+
+| Regime     | μ (mean) | φ (mean) | σ (mean) |
+|:-----------|:--------:|:--------:|:--------:|
+| Pré (pre)  | −13.808  |  0.969   |  0.162   |
+| Pós (post) | −13.336  |  0.988   |  0.114   |
+| Recov      | ≈ −14.4  |  ≈ 0.98  |  ≈ 0.11  |
+
+#### Posterior — volatilidade anualizada
+
+| Regime |   Média | Mediana |
+|:-------|--------:|--------:|
+| pre    | 0.35156 | 0.35152 |
+| post   | 0.46028 | 0.46015 |
+| recov  | 0.26128 | 0.26127 |
+
+**Comparações:** - `post − pre`: +0.1087, **prob(\>0) ≈ 1.00** → aumento praticamente certo\
+- `recov − pre`: −0.0903, **prob(\>0) ≈ 0.00** → redução praticamente certa
+
+#### Interpretação dos parâmetros
+
+-   **μ (nível de longo prazo log-vol):** sobe (menos negativo) → maior nível médio de volatilidade após o choque.\
+-   **φ (persistência):** aumenta no pós (≈0.988) → volatilidade mais persistente (memória longa).\
+-   **σ (volatilidade da volatilidade):** diminui → choques menos erráticos, apesar do nível médio mais alto.
+
+Os resultados do `stochvol` confirmam as métricas realizadas: - O **nível médio de volatilidade** aumentou fortemente no pós.\
+- A **persistência** se elevou, mantendo o regime volátil por mais tempo.\
+- A **recuperação** reduziu a variância para níveis menores que o pré.
+
+Assim, o evento analisado gerou **um choque temporário, porém marcante, de volatilidade**, seguido por uma estabilização duradoura.
+
+------------------------------------------------------------------------
+
+```{r}
+ann_draws_df <- data.frame(
+  draw = seq_len(common_draws),
+  pre  = ann1,
+  post = ann2,
+  recov = ann3
+)
+
+head(ann_draws_df)
+
+summary_by_regime <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol") %>%
+  group_by(regime) %>%
+  summarise(
+    n = n(),
+    mean = mean(ann_vol),
+    median = median(ann_vol),
+    sd = sd(ann_vol),
+    q2.5 = quantile(ann_vol, 0.025),
+    q97.5 = quantile(ann_vol, 0.975)
+  ) %>%
+  arrange(regime)
+
+knitr::kable(summary_by_regime, digits = c(0,0,4,4,4,4,4),
+             caption = "Resumo posterior da volatilidade anualizada por regime")
+
+diff_draws <- ann_draws_df %>%
+  mutate(
+    diff_post_pre = post - pre,
+    diff_recov_pre = recov - pre,
+    pct_post_pre = 100 * (post - pre) / pre,
+    pct_recov_pre = 100 * (recov - pre) / pre
+  )
+
+diff_summary <- tibble(
+  comparison = c("post - pre", "recov - pre"),
+  mean_diff = c(mean(diff_draws$diff_post_pre), mean(diff_draws$diff_recov_pre)),
+  sd_diff   = c(sd(diff_draws$diff_post_pre), sd(diff_draws$diff_recov_pre)),
+  q2.5_diff = c(quantile(diff_draws$diff_post_pre, 0.025), quantile(diff_draws$diff_recov_pre, 0.025)),
+  q97.5_diff= c(quantile(diff_draws$diff_post_pre, 0.975), quantile(diff_draws$diff_recov_pre, 0.975)),
+  prob_gt0  = c(mean(diff_draws$diff_post_pre > 0), mean(diff_draws$diff_recov_pre > 0)),
+  mean_pct_change = c(mean(diff_draws$pct_post_pre, na.rm = TRUE), mean(diff_draws$pct_recov_pre, na.rm = TRUE))
+)
+
+knitr::kable(diff_summary, digits = c(0,4,4,4,4,4,2),
+             caption = "Resumo das diferenças posteriores entre regimes (valor absoluto e %).")
+
+df_for_plot <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol")
+
+p_box <- ggplot(df_for_plot, aes(x = regime, y = ann_vol, fill = regime)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +            # boxplot sem outliers 
+  stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +
+  labs(
+    title = "Boxplot das distribuições posteriores de volatilidade anualizada",
+    subtitle = "Cada ponto = 1 draw posterior (amostra MCMC); boxes mostram mediana e IQR",
+    x = "Períodos",
+    y = "Volatilidade anualizada (aprox.)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+print(p_box)
+
+report_table <- summary_by_regime %>%
+  left_join(
+    tibble(
+      regime = c("pre","post","recov"),
+      prob_gt_pre = c(NA, mean(ann_draws_df$post > ann_draws_df$pre), mean(ann_draws_df$recov > ann_draws_df$pre))
+    ),
+    by = "regime"
+  ) %>%
+  mutate(
+    mean = round(mean, 4),
+    median = round(median, 4),
+    sd = round(sd, 4),
+    q2.5 = round(q2.5, 4),
+    q97.5 = round(q97.5, 4),
+    prob_gt_pre = ifelse(is.na(prob_gt_pre), "-", round(prob_gt_pre, 4))
+  )
+
+knitr::kable(report_table, caption = "Tabela resumida para relatório: volatilidade posterior por regime e probabilidade (post/recov > pre)")
+
+df_for_plot <- ann_draws_df %>%
+  pivot_longer(cols = c(pre, post, recov), names_to = "regime", values_to = "ann_vol") %>%
+  mutate(regime = factor(regime, levels = c("pre","post","recov")))
+
+ann_stats <- df_for_plot %>%
+  group_by(regime) %>%
+  summarise(
+    n = n(),
+    mean = mean(ann_vol),
+    median = median(ann_vol),
+    sd = sd(ann_vol),
+    q025 = quantile(ann_vol, 0.025),
+    q975 = quantile(ann_vol, 0.975),
+    .groups = "drop"
+  )
+
+y_max_q975 <- max(ann_stats$q975, na.rm = TRUE)
+y_margin <- 0.03 * y_max_q975   # 3% do valor máximo como margem
+ann_stats <- ann_stats %>%
+  mutate(
+    label = sprintf("mean=%.3f\n95%%CI=[%.3f,%.3f]", mean, q025, q975),
+    y_pos = q975 + y_margin
+  )
+
+p_clean_fix <- ggplot(df_for_plot, aes(x = regime, y = ann_vol, fill = regime)) +
+  geom_violin(width = 0.9, trim = FALSE, alpha = 0.35, color = NA) +
+  geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.9, color = "black") +
+  stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white", color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 2.5, fill = "red", color = "black") +
+  geom_errorbar(data = ann_stats, aes(x = regime, ymin = q025, ymax = q975),
+                width = 0.05, color = "black", size = 0.6, inherit.aes = FALSE) +
+  geom_text(data = ann_stats, aes(x = regime, y = y_pos, label = label),
+            size = 6, vjust = 0, inherit.aes = FALSE) +  # aumentado
+  labs(
+    title = "Distribuições posteriores da volatilidade anualizada por regime",
+    subtitle = "Violin = densidade posterior; Box = IQR; ◼ mediana; ● média (vermelho); linhas vert = IC95%",
+    x = "Periodos",
+    y = "Volatilidade anualizada (aprox.)"
+  ) +
+  theme_minimal(base_size = 15) +   # aumentado de 12 → 15
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 18),   # +3
+    plot.subtitle = element_text(size = 13),               # +3
+    axis.title = element_text(size = 14),                  # +3
+    axis.text = element_text(size = 13)                    # +3
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_cartesian(clip = "off")
+
+print(p_clean_fix)
+
+
+
+```
+
+\##############################################################################################################################################################
+
+```{r}
+rets <- dt1$Ret.1min
+segments <- list(
+  A = 1:10000,
+  B = 11600:22600,
+  C = 33600:43600
+)
+
+vol_list2 <- lapply(names(segments), function(seg_name) {
+  idx   <- segments[[seg_name]]
+  vol   <- sqrt(rets[idx]^2)
+  data.frame(index = idx, vol = vol, segment = seg_name)
+})
+df_vol_inst <- bind_rows(vol_list2)
+
+plot_segment <- function(df, seg_name) {
+  df_sub <- df %>% filter(segment == seg_name)
+  ggplot(df_sub, aes(x = index, y = vol)) +
+    geom_line() +
+    labs(
+      title = paste0("Volatilidade Realizada – Segmento ", seg_name),
+      x     = "Índice",
+      y     = "Volatilidade Realizada (|Retorno|)"
+    ) +
+    ylim(0, 0.02)+
+    theme_minimal()
+}
+
+plot_A <- plot_segment(df_vol_inst, "A")
+plot_B <- plot_segment(df_vol_inst, "B")
+plot_C <- plot_segment(df_vol_inst, "C")
+
+plot_A  
+plot_B  
+plot_C  
+
+
+```
+
+\`\`\`
+
+## Descrição dos Dados
+
+Para ilustrar a identificação de saltos em diferentes escalas, foi utilizada a série de preços da PETR4 (Petrobrás) no período de 04/01/2021 a 25/06/2021, com frequência de 1 minuto. A escolha deste ativo deve-se à sua alta liquidez e influência sobre o Ibovespa, além de um evento de queda acentuada em 22/02/2021, motivado pelo anúncio de troca de presidência da empresa.
+
+-   **Fonte**: MetaTrader 5.
+
+-   **Período**: 04/01/2021 a 25/06/2021 (119 dias, 49 611 observações).
+
+-   **Ajustes**: remoção dos primeiros 19 minutos após abertura (10h20 em diante), para evitar ruídos de leilão de abertura.
+
+## Próximos Passos
+
+-   Como reproduzir a serie estocastica.
+-   Identificar saltos na serie estocastica limite universal.
+-   tentar deconpor em ondaleta se possivel a serie estocastica.
+
+ler barunik, arruma ondeleta, saltos intradiarios, definir vetor na serie completa (onde não tiver saltos = 0, onde tiver salto - valor do indice anterior) calculo no Jv
