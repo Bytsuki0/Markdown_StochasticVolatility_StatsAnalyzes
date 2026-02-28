@@ -280,41 +280,6 @@ ggplot(
   theme(plot.title = element_text(face = "bold"))
 ```
 
-```{r price-segments-plot}
-fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
-
-for (ev in events) {
-  segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
-    idx <- ev[[nm]]
-    if (is.null(idx)) return(NULL)
-    data.frame(janela = nm, xmin = idx[1] - 0.5, xmax = tail(idx, 1) + 0.5)
-  }))
-
-  # Zoom apenas na regiao de interesse
-  zoom_s <- max(1,       ev$crash_idx - 22000)
-  zoom_e <- min(n_total, ev$crash_idx + 32000)
-  plot_df <- data.frame(index = seq_len(n_total), price = dt1$Close.1min)[zoom_s:zoom_e, ]
-
-  print(
-    ggplot(plot_df, aes(x = index, y = price)) +
-      geom_rect(data = segs_df,
-                aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
-                inherit.aes = FALSE, alpha = 0.30) +
-      geom_line(color = "black", linewidth = 0.35) +
-      geom_vline(xintercept = ev$crash_idx, color = "red",
-                 linewidth = 0.9, linetype = "solid") +
-      scale_fill_manual(name = "Janela", values = fill_colors_seg) +
-      labs(title    = paste0(ev$event_label, " - Janelamentos sobre Preco IBM"),
-           subtitle = paste0("Linha vermelha = crash (", format(ev$crash_date, "%Y-%m-%d %H:%M"),
-                             ") | Ret: ", round(ev$crash_ret * 100, 3), "%"),
-           x = "Indice (observacao global)", y = "Preco de Fechamento") +
-      theme_minimal(base_size = 11) +
-      theme(plot.title = element_text(face = "bold"), legend.position = "top") +
-      coord_cartesian(expand = FALSE)
-  )
-}
-```
-
 ## Teste de Estacionariedade (ADF) - 9 Segmentos
 
 ```{r adf-test}
@@ -505,11 +470,46 @@ for (ev in events) {
 }
 ```
 
+## Visualizacao dos Janelamentos sobre a Serie de Precos
+
+```{r price-segments-plot}
+fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
+
+for (ev in events) {
+  segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx)) return(NULL)
+    data.frame(janela = nm, xmin = idx[1] - 0.5, xmax = tail(idx, 1) + 0.5)
+  }))
+
+  # Zoom apenas na regiao de interesse
+  zoom_s <- max(1,       ev$crash_idx - 22000)
+  zoom_e <- min(n_total, ev$crash_idx + 32000)
+  plot_df <- data.frame(index = seq_len(n_total), price = dt1$Close.1min)[zoom_s:zoom_e, ]
+
+  print(
+    ggplot(plot_df, aes(x = index, y = price)) +
+      geom_rect(data = segs_df,
+                aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
+                inherit.aes = FALSE, alpha = 0.30) +
+      geom_line(color = "black", linewidth = 0.35) +
+      geom_vline(xintercept = ev$crash_idx, color = "red",
+                 linewidth = 0.9, linetype = "solid") +
+      scale_fill_manual(name = "Janela", values = fill_colors_seg) +
+      labs(title    = paste0(ev$event_label, " - Janelamentos sobre Preco IBM"),
+           subtitle = paste0("Linha vermelha = crash (", format(ev$crash_date, "%Y-%m-%d %H:%M"),
+                             ") | Ret: ", round(ev$crash_ret * 100, 3), "%"),
+           x = "Indice (observacao global)", y = "Preco de Fechamento") +
+      theme_minimal(base_size = 11) +
+      theme(plot.title = element_text(face = "bold"), legend.position = "top") +
+      coord_cartesian(expand = FALSE)
+  )
+}
+```
+
 ## Realized Variance, Bipower, Saltos e Testes Estatisticos - por Evento
 
 ```{r rv-bv-jump-tests}
-minutos_ano <- 252 * 390   # NYSE: ~390 min/dia x 252 dias uteis
-
 calc_RV <- function(r) sum(r^2, na.rm = TRUE)
 
 calc_BV <- function(r) {
@@ -623,124 +623,103 @@ for (k in 1:3) {
 }
 ```
 
-## Comparacao Realizada das Distribuicoes Posteriores - por Evento
+## Comparacao Bayesiana das Distribuicoes Posteriores - por Evento
 
-```{r rv-bv-jump-tests2}
-minutos_ano <- 252 * 390   # NYSE: ~390 min/dia x 252 dias uteis
+```{r bayesian-comparison}
+get_para_mat   <- function(sv) as.matrix(para(sv,   chain = "concatenated"))
+get_latent_mat <- function(sv) as.matrix(latent(sv, chain = "concatenated"))
 
-calc_RV <- function(r) sum(r^2, na.rm = TRUE)
-
-calc_BV <- function(r) {
-  if (length(r) < 2) return(NA_real_)
-  (pi / 2)^(-1) * sum(abs(r[-1]) * abs(r[-length(r)]), na.rm = TRUE)
+sample_rows <- function(mat, n) {
+  if (nrow(mat) <= n) return(mat)
+  mat[sample(seq_len(nrow(mat)), n), , drop = FALSE]
 }
 
-annualize_vol_from_rv <- function(rv, n_obs) {
-  if (n_obs <= 0) return(NA_real_)
-  sqrt(rv / n_obs) * sqrt(minutos_ano)
+summ_param <- function(parmat) {
+  as.data.frame(t(apply(parmat, 2, function(x)
+    c(mean  = mean(x), sd = sd(x),
+      q2.5  = quantile(x, .025), q97.5 = quantile(x, .975)))))
 }
 
-bootstrap_RV <- function(r, R = 1500) {
-  r <- na.omit(as.numeric(r))
-  if (length(r) < 5) return(NULL)
-  b  <- boot::boot(data = r, statistic = function(d, i) sum(d[i]^2), R = R)
-  ci <- boot::boot.ci(b, type = c("perc", "bca"))
-  list(boot = b, ci = ci)
+param_diff <- function(matA, matB, parname) {
+  diffs <- matB[, parname] - matA[, parname]
+  data.frame(mean = mean(diffs), sd = sd(diffs),
+             q2.5 = quantile(diffs,.025), q97.5 = quantile(diffs,.975),
+             prob_gt0 = mean(diffs > 0))
 }
 
-perm_test_RV_diff <- function(r1, r2, R = 2000) {
-  r1 <- na.omit(as.numeric(r1)); r2 <- na.omit(as.numeric(r2))
-  obs_diff <- calc_RV(r2) - calc_RV(r1)
-  pooled   <- c(r1, r2); n1 <- length(r1); n2 <- length(r2)
-  set.seed(123)
-  perm_diffs <- replicate(R, {
-    p <- sample(pooled)
-    calc_RV(p[(n1+1):(n1+n2)]) - calc_RV(p[1:n1])
-  })
-  list(obs_diff = obs_diff, p_value = mean(abs(perm_diffs) >= abs(obs_diff)))
+per_draw_ann_vol <- function(latmat) {
+  sqrt(rowMeans(exp(latmat), na.rm = TRUE)) * sqrt(minutos_ano)
 }
 
-calc_for_segment <- function(name, idx, ret_vec) {
-  r   <- as.numeric(na.omit(ret_vec[idx]))
-  rv  <- calc_RV(r); bv <- calc_BV(r)
-  jmp <- max(rv - bv, 0)
-  list(name      = name, n = length(r),
-       RV        = rv, BV = bv, Jump = jmp,
-       JumpShare = ifelse(rv > 0, jmp / rv, NA_real_),
-       VolAnn    = annualize_vol_from_rv(rv, length(r)),
-       mean      = mean(r), sd = sd(r),
-       skewness  = moments::skewness(r), kurtosis = moments::kurtosis(r),
-       boot      = bootstrap_RV(r, R = 1500))
-}
+summarize_draws <- function(v)
+  c(mean = mean(v), median = median(v), sd = sd(v),
+    q2.5 = quantile(v, .025), q97.5 = quantile(v, .975))
 
-all_rv_results <- vector("list", 3)
+ann_draws_all <- vector("list", 3)
 
 for (k in 1:3) {
-  ev      <- events[[k]]
-  janelas <- list(pre = ev$pre, during = ev$during, post = ev$post)
+  ev  <- events[[k]]
+  mdl <- sv_models[[k]]
 
-  results <- lapply(names(janelas), function(nm) {
-    if (is.null(janelas[[nm]])) return(NULL)
-    calc_for_segment(nm, janelas[[nm]], rets_full)
-  })
-  names(results) <- names(janelas)
-  results <- Filter(Negate(is.null), results)
-  all_rv_results[[k]] <- results
+  valid_nms <- names(Filter(Negate(is.null), mdl))
+  if (length(valid_nms) < 2) {
+    cat("\n", ev$event_label, ": modelos insuficientes, pulando.\n")
+    next
+  }
+
+  para_list   <- lapply(mdl[valid_nms], get_para_mat)
+  latent_list <- lapply(mdl[valid_nms], get_latent_mat)
+  common_n    <- min(sapply(para_list, nrow))
+
+  set.seed(1)
+  para_s   <- lapply(para_list,   sample_rows, n = common_n)
+  latent_s <- lapply(latent_list, sample_rows, n = common_n)
 
   cat("\n\n===", ev$event_label, "| Crash:", format(ev$crash_date, "%Y-%m-%d"), "===\n")
 
-  summary_tbl <- do.call(rbind, lapply(results, function(x) {
-    data.frame(janela    = x$name, n = x$n,
-               RV        = x$RV,  BV = x$BV,
-               Jump      = x$Jump, JumpShare = x$JumpShare,
-               VolAnn    = x$VolAnn,
-               mean      = x$mean, sd = x$sd,
-               skewness  = x$skewness, kurtosis = x$kurtosis)
-  }))
-  print(knitr::kable(summary_tbl, digits = 6,
-                     caption = paste0(ev$event_label, " - RV, Bipower, Jump, Vol Anualizada")))
+  # Tabela de parametros
+  tab_para <- do.call(rbind, Map(function(pm, nm) {
+    df <- summ_param(pm); df$regime <- nm; df$param <- rownames(df); df
+  }, para_s, valid_nms))
+  print(knitr::kable(tab_para[, c("regime","param","mean","sd","q2.5","q97.5")],
+                     digits = 4,
+                     caption = paste0(ev$event_label, " - Parametros SV por janela")))
 
-  # Diferencas de RV
-  pairs <- list(c("pre", "during"), c("pre", "post"))
-  for (pr in pairs) {
+  # Diferencas posteriores de parametros
+  for (pr in list(c("pre","during"), c("pre","post"))) {
     a <- pr[1]; b <- pr[2]
-    if (!is.null(results[[a]]) && !is.null(results[[b]])) {
-      diff_rv <- results[[b]]$RV - results[[a]]$RV
-      pct_rv  <- diff_rv / abs(results[[a]]$RV) * 100
-      cat(sprintf("  RV (%s - %s): %+.6f  (%+.2f%%)\n", b, a, diff_rv, pct_rv))
+    if (!(a %in% valid_nms && b %in% valid_nms)) next
+    cat(sprintf("  --- %s vs %s ---\n", b, a))
+    for (par in c("mu","phi","sigma")) {
+      d <- param_diff(para_s[[a]], para_s[[b]], par)
+      cat(sprintf("    %s: mean=%+.4f | P(%s>%s)=%.3f\n", par, d$mean, b, a, d$prob_gt0))
     }
   }
 
-  # Testes permutacionais
-  for (pr in pairs) {
+  # Volatilidade anualizada
+  ann_list <- lapply(latent_s, per_draw_ann_vol)
+  names(ann_list) <- valid_nms
+
+  tab_vol <- do.call(rbind, Map(function(v, nm) {
+    df <- as.data.frame(t(summarize_draws(v))); df$regime <- nm; df
+  }, ann_list, valid_nms))
+  print(knitr::kable(tab_vol[, c("regime","mean","median","sd","q2.5","q97.5")],
+                     digits = 4,
+                     caption = paste0(ev$event_label, " - Vol. Anualizada Posterior")))
+
+  for (pr in list(c("pre","during"), c("pre","post"))) {
     a <- pr[1]; b <- pr[2]
-    if (!is.null(janelas[[a]]) && !is.null(janelas[[b]])) {
-      perm_res <- perm_test_RV_diff(rets_full[janelas[[a]]], rets_full[janelas[[b]]], R = 2000)
-      cat(sprintf("  Perm test (%s vs %s): p = %.4f\n", b, a, perm_res$p_value))
-    }
+    if (!(a %in% valid_nms && b %in% valid_nms)) next
+    diff_ab <- ann_list[[b]] - ann_list[[a]]
+    cat(sprintf("  P(vol_%s > vol_%s) = %.4f | mean diff = %+.4f\n",
+                b, a, mean(diff_ab > 0), mean(diff_ab)))
   }
 
-  # Levene
-  seg_rets <- unlist(lapply(names(janelas), function(nm) {
-    if (!is.null(janelas[[nm]])) as.numeric(rets_full[janelas[[nm]]]) else NULL
-  }))
-  seg_labs <- unlist(lapply(names(janelas), function(nm) {
-    if (!is.null(janelas[[nm]])) rep(nm, length(janelas[[nm]])) else NULL
-  }))
-  combined <- data.frame(ret = seg_rets,
-                         seg = factor(seg_labs, levels = c("pre", "during", "post")))
-  lev <- car::leveneTest(ret ~ seg, data = combined)
-  cat(sprintf("  Levene: F = %.4f | p = %.6f\n", lev[1, "F value"], lev[1, "Pr(>F)"]))
-
-  # KS
-  for (pr in pairs) {
-    a <- pr[1]; b <- pr[2]
-    if (!is.null(janelas[[a]]) && !is.null(janelas[[b]])) {
-      ks <- ks.test(as.numeric(rets_full[janelas[[a]]]),
-                    as.numeric(rets_full[janelas[[b]]]))
-      cat(sprintf("  KS (%s vs %s): D = %.4f | p = %.6f\n", b, a, ks$statistic, ks$p.value))
-    }
-  }
+  ann_draws_all[[k]] <- list(event_label = ev$event_label,
+                              crash_date  = ev$crash_date,
+                              ann_list    = ann_list,
+                              valid_nms   = valid_nms,
+                              common_n    = common_n)
 }
 ```
 
@@ -1163,131 +1142,46 @@ knitr::kable(rank_tbl,
 ## Visualizacoes Finais: Violin + Densidade Posterior - por Evento
 
 ```{r final-plots, fig.height=5}
-# ---- Variaveis locais necessarias neste chunk ----
-minutos_ano   <- 252 * 390
 colors_janela <- c(pre = "#2ECC71", during = "#E74C3C", post = "#3498DB")
 
-# Funcoes de extracao (redefinidas localmente para garantir disponibilidade)
-.get_para_mat   <- function(sv) as.matrix(para(sv,   chain = "concatenated"))
-.get_latent_mat <- function(sv) as.matrix(latent(sv, chain = "concatenated"))
-.sample_rows    <- function(mat, n) {
-  if (nrow(mat) <= n) return(mat)
-  mat[sample(seq_len(nrow(mat)), n), , drop = FALSE]
-}
-.per_draw_ann_vol <- function(latmat)
-  sqrt(rowMeans(exp(latmat), na.rm = TRUE)) * sqrt(minutos_ano)
-
-ann_draws_all <- vector("list", length(sv_models))
-# ---- Diagnostico: verifica ann_draws_all ----
-cat("=== Diagnostico ann_draws_all ===\n")
-n_populated <- sum(!sapply(ann_draws_all, is.null))
-cat(sprintf("Entradas populadas: %d / %d\n", n_populated, length(ann_draws_all)))
-
-# ---- Reconstrucao a partir de sv_models (caso ann_draws_all esteja vazio) ----
-# Isso acontece quando o chunk 'bayesian-comparison' nao rodou nesta sessao
-# ou quando todos os modelos eram NULL na hora de popular a lista.
-if (n_populated == 0) {
-  cat("ann_draws_all vazio — reconstruindo a partir de sv_models...\n")
-
-  # sv_models deve existir no ambiente (chunk sv-models)
-  if (!exists("sv_models")) stop("sv_models nao encontrado. Rode o chunk 'sv-models' primeiro.")
-
-  ann_draws_all <- vector("list", length(sv_models))
-
-  for (k in seq_along(sv_models)) {
-    ev  <- events[[k]]
-    mdl <- sv_models[[k]]
-
-    valid_nms <- names(Filter(Negate(is.null), mdl))
-    cat(sprintf("  Evento %d (%s): modelos validos = [%s]\n",
-                k, ev$event_label, paste(valid_nms, collapse = ", ")))
-
-    if (length(valid_nms) < 1) next
-
-    # Extrai latentes e calcula vol anualizada por draw
-    latent_list <- lapply(mdl[valid_nms], .get_latent_mat)
-    common_n    <- min(sapply(latent_list, nrow))
-    set.seed(1)
-    latent_s    <- lapply(latent_list, .sample_rows, n = common_n)
-    ann_list    <- lapply(latent_s, .per_draw_ann_vol)
-    names(ann_list) <- valid_nms
-
-    ann_draws_all[[k]] <- list(
-      event_label = ev$event_label,
-      crash_date  = ev$crash_date,
-      ann_list    = ann_list,
-      valid_nms   = valid_nms,
-      common_n    = common_n
-    )
-    cat(sprintf("    -> populado com %d draws\n", common_n))
-  }
-
-  n_populated <- sum(!sapply(ann_draws_all, is.null))
-  cat(sprintf("Apos reconstrucao: %d / %d entradas validas\n", n_populated, length(ann_draws_all)))
-}
-
-if (n_populated == 0) {
-  stop(paste(
-    "Nenhum modelo SV disponivel para gerar os plots.",
-    "Possiveis causas:",
-    "  1) Os arquivos .rds ainda nao existem (primeira execucao — aguarde o MCMC terminar)",
-    "  2) Os janelamentos pre/during/post resultaram em segmentos com < 50 obs (dataset curto)",
-    "  3) O chunk 'sv-models' encontrou erros silenciosos — reveja o output desse chunk",
-    sep = "\n"
-  ))
-}
-
-# ---- Plots por evento ----
 for (k in seq_along(ann_draws_all)) {
   adk <- ann_draws_all[[k]]
-  if (is.null(adk)) {
-    cat(sprintf("\nEvento %d: sem dados, pulando.\n", k))
-    next
-  }
+  if (is.null(adk)) next
 
   ev_label <- adk$event_label
   ev_date  <- format(adk$crash_date, "%Y-%m-%d")
 
-  cat(sprintf("\nGerando plots: %s | crash %s | regimes: [%s] | draws: %d\n",
-              ev_label, ev_date,
-              paste(adk$valid_nms, collapse = ", "),
-              adk$common_n))
-
   df_long <- do.call(rbind, Map(function(v, nm) {
-    data.frame(ann_vol = as.numeric(v), regime = nm, stringsAsFactors = FALSE)
+    data.frame(ann_vol = v, regime = nm, stringsAsFactors = FALSE)
   }, adk$ann_list, adk$valid_nms)) %>%
     mutate(regime = factor(regime, levels = c("pre","during","post")))
 
-  # --- Densidade ---
+  # Densidade
   print(
     ggplot(df_long, aes(x = ann_vol, fill = regime)) +
       geom_density(alpha = 0.45) +
-      scale_fill_manual(values = colors_janela, drop = FALSE) +
+      scale_fill_manual(values = colors_janela) +
       labs(title    = paste0(ev_label, " - Densidades Posteriores Vol. Anualizada"),
            subtitle = paste0("Crash: ", ev_date),
            x = "Volatilidade anualizada (aprox.)", y = "Densidade") +
       theme_minimal()
   )
 
-  # --- Violin + Boxplot ---
+  # Violin + Boxplot
   ann_stats <- df_long %>%
     group_by(regime) %>%
-    summarise(mean   = mean(ann_vol),
-              median = median(ann_vol),
+    summarise(mean   = mean(ann_vol),   median = median(ann_vol),
               sd     = sd(ann_vol),
               q025   = quantile(ann_vol, .025),
-              q975   = quantile(ann_vol, .975),
-              .groups = "drop") %>%
-    mutate(
-      label = sprintf("mean=%.3f\n95%%CI=[%.3f,%.3f]", mean, q025, q975),
-      y_pos = q975 + 0.03 * max(q975, na.rm = TRUE)
-    )
+              q975   = quantile(ann_vol, .975), .groups = "drop") %>%
+    mutate(label = sprintf("mean=%.3f\n95%%CI=[%.3f,%.3f]", mean, q025, q975),
+           y_pos = q975 + 0.03 * max(q975, na.rm = TRUE))
 
   print(
     ggplot(df_long, aes(x = regime, y = ann_vol, fill = regime)) +
       geom_violin(width = 0.9, trim = FALSE, alpha = 0.35, color = NA) +
       geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.9, color = "black") +
-      stat_summary(fun = median, geom = "point", shape = 23, size = 3,  fill = "white") +
+      stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +
       stat_summary(fun = mean,   geom = "point", shape = 21, size = 2.5, fill = "red") +
       geom_errorbar(data = ann_stats,
                     aes(x = regime, ymin = q025, ymax = q975),
@@ -1295,7 +1189,7 @@ for (k in seq_along(ann_draws_all)) {
       geom_text(data = ann_stats,
                 aes(x = regime, y = y_pos, label = label),
                 size = 3.5, vjust = 0, inherit.aes = FALSE) +
-      scale_fill_manual(values = colors_janela, drop = FALSE) +
+      scale_fill_manual(values = colors_janela) +
       labs(title    = paste0(ev_label, " - Distribuicoes Posteriores da Vol. Anualizada"),
            subtitle = paste0("Crash: ", ev_date,
                              " | Violin = densidade | Box = IQR | mediana/media"),
