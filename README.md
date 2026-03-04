@@ -5,7 +5,7 @@
 
   <h2>Visão geral</h2>
   <p>Projeto de análise empírica de volatilidade estocástica e análises intradiárias aplicadas a séries financeiras. O repositório contém análises e artefatos para múltiplos ativos (ex.: PETR4 e IBM), incluindo scripts em R, arquivos Quarto (QMD), relatórios HTML exportados e dados CSV com frequência intradiária.</p>
-  <p>As informações de estrutura e arquivos foram verificadas diretamente no repositório. :contentReference[oaicite:3]{index=3}</p>
+  <p>As informações de estrutura e arquivos foram verificadas diretamente no repositório.
 
   <h2>Objetivos do repositório</h2>
   <ul>
@@ -29,8 +29,7 @@
     </tbody>
   </table>
 
-  <p>Fonte: listagem dos diretórios e arquivos no repositório. :contentReference[oaicite:4]{index=4}</p>
-
+  <p>Fonte: listagem dos diretórios e arquivos no repositório. 
   <h2>Principais artefatos encontrados</h2>
   <ul>
     <li><strong>Arquivos Quarto (.qmd)</strong>: notebooks/relatórios que combinam código R e narrativa (renderizados para HTML).</li>
@@ -94,11 +93,10 @@ quarto::quarto_render("analise_volatilidade_petr4.qmd")
     <li><code>dt_1min_PETR4_2021_metatrader.csv</code> — dados intradiários com granularidade de 1 minuto para PETR4 (formato típico: timestamp, open, high, low, close, volume).</li>
     <li>Arquivos <code>IBM_data_part1.csv</code>, <code>IBM_data_part2.csv</code>, <code>IBM_data_part3.csv</code> — fragmentos de dados IBM, possivelmente separados por período para reduzir tamanho.</li>
   </ul>
-  <p>Antes de rodar as análises, verifique a codificação, o separador (vírgula/semicolon), e as colunas timestamp para assegurar compatibilidade com os scripts R/Quarto. :contentReference[oaicite:5]{index=5}</p>
+  <p>Antes de rodar as análises, verifique a codificação, o separador (vírgula/semicolon), e as colunas timestamp para assegurar compatibilidade com os scripts R/Quarto.
 
   <h2>Relatórios entregues</h2>
-  <p>O repositório contém versões HTML renderizadas dos relatórios de análise (úteis para leitura rápida e apresentação). Para regenerá-los, siga a seção "Renderizar relatórios Quarto" acima. :contentReference[oaicite:6]{index=6}</p>
-
+  <p>O repositório contém versões HTML renderizadas dos relatórios de análise (úteis para leitura rápida e apresentação). Para regenerá-los, siga a seção "Renderizar relatórios Quarto" acima. 
   <h2>Boas práticas para reproduzir a análise</h2>
   <ol>
     <li>Trabalhe com uma cópia dos CSVs originais; mantenha os dados brutos intactos.</li>
@@ -126,8 +124,9 @@ quarto::quarto_render("analise_volatilidade_petr4.qmd")
     <li>Incluir um breve guia de pré-processamento (parâmetros usados no <code>trimmer.py</code> e quaisquer transformações aplicadas aos CSVs).</li>
   </ul>
 
-  <p><em>Fonte de verificação:</em> listagens de arquivos e diretórios consultadas no repositório. :contentReference[oaicite:7]{index=7}</p>
+  <p><em>Fonte de verificação:</em> listagens de arquivos e diretórios consultadas no repositório. 
 
 </body>
 </html>
+
 
