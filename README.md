@@ -1,25 +1,7 @@
-<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>MarketStocasticVolatilityAnalitics — README</title>
-  <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; line-height: 1.6; color: #111; padding: 28px; max-width: 900px; }
-    h1, h2, h3 { color: #0b2966; margin-top: 1.2em; }
-    pre { background: #f6f8fa; border: 1px solid #e1e4e8; padding: 12px; overflow-x: auto; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
-    ul, ol { margin-left: 1.2em; }
-    table { border-collapse: collapse; margin-top: 8px; margin-bottom: 16px; width: 100%; }
-    th, td { border: 1px solid #dfe2e5; padding: 8px; text-align: left; }
-    .note { background: #fff8c5; border-left: 4px solid #ffd33d; padding: 10px; margin: 12px 0; }
-  </style>
-</head>
-<body>
 
   <h1>MarketStocasticVolatilityAnalitics</h1>
 
-  <p><strong>Proprietário:</strong> :contentReference[oaicite:2]{index=2}</p>
+  <p><strong>Proprietário:</strong> Bytsuki0
 
   <h2>Visão geral</h2>
   <p>Projeto de análise empírica de volatilidade estocástica e análises intradiárias aplicadas a séries financeiras. O repositório contém análises e artefatos para múltiplos ativos (ex.: PETR4 e IBM), incluindo scripts em R, arquivos Quarto (QMD), relatórios HTML exportados e dados CSV com frequência intradiária.</p>
@@ -43,8 +25,6 @@
     <tbody>
       <tr><td><code>IBM_analise/</code></td><td>Scripts Quarto (.qmd), HTML exportado e arquivos auxiliares relacionados à análise da IBM (ex.: <code>analise_volatilidade_ibm_3_op.qmd</code>, versão HTML e arquivos de suporte).</td></tr>
       <tr><td><code>Petr4_ana/</code></td><td>Scripts R, Quarto e dados para análise de PETR4 (ex.: <code>analise_volatilidade_petr4.qmd</code>, <code>analise_volatilidade_petr4.html</code>, <code>dt_1min_PETR4_2021_metatrader.csv</code>, <code>trimmer.py</code>, PDFs explicativos).</td></tr>
-      <tr><td><code>.vscode/</code></td><td>Configurações do editor (opcional).</td></tr>
-      <tr><td><code>.gitignore</code></td><td>Regras de ignore do Git.</td></tr>
       <tr><td><code>README.md</code></td><td>Arquivo de leitura atual do repositório (curto); este documento fornece documentação ampliada em HTML.</td></tr>
     </tbody>
   </table>
@@ -150,3 +130,4 @@ quarto::quarto_render("analise_volatilidade_petr4.qmd")
 
 </body>
 </html>
+
