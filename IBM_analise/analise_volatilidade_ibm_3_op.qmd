@@ -28,6 +28,8 @@ library(coda)
 library(car)
 library(boot)
 library(knitr)
+library(strucchange)
+library(changepoint)
 ```
 
 ## Leitura e Pré-processamento dos Dados (IBM_data.csv)
@@ -86,51 +88,37 @@ boxplot(as.double(ret.1min),
 ## Identificacao das 3 Maiores Quedas
 
 ```{r detect-crashes}
-
-
 PRE_START_OFFSET  <- -20000
 PRE_END_OFFSET    <- -10000
 DUR_START_OFFSET  <-  -1000
 DUR_END_OFFSET    <-   9000
-POST_START_OFFSET <-  20000
-POST_END_OFFSET   <-  30000
+POST_START_OFFSET <-  30000
+POST_END_OFFSET   <-  40000
+
 MIN_CRASH_SEP     <-  31000
+MIN_CRASH_PCT     <-  0.10
+MIN_FUTURE_IDX    <-  50000
+MAX_CRASHES       <-  8
 
 n_total   <- nrow(dt1)
 rets_full <- dt1$Ret.1min
 
-# Passo 1: Para cada dia D calcular o preco de fechamento do dia
-#          (ultimo Close do pregao) e comparar com o fechamento
-#          do dia D+1. A diferenca close(D+1) - close(D) captura
-#          o gap overnight / queda diaria no preco da acao.
-#
-# Passo 2: Selecionar os 3 dias com a MAIOR QUEDA no fechamento
-#          (diferenca mais negativa), com separacao minima de
-#          MIN_CRASH_SEP observacoes entre eventos.
-#
-# Passo 3: Dentro de cada dia de crash selecionado, encontrar
-#          o indice global (na serie inteira dt1) do minuto
-#          com o MENOR RETORNO do dia — esse e o indice X
-#          usado nos janelamentos.
 # ============================================================
 
 daily_close <- dt1 %>%
   mutate(trade_date = as.Date(Period)) %>%
   group_by(trade_date) %>%
   summarise(
-    close_last   = last(Close.1min),          # ultimo preco do dia
-    last_row_idx = last(row_number()) +        # posicao global na serie
-                   (first(which(dt1$Period == first(Period))) - 1L),
+    close_last = last(Close.1min),
     .groups = "drop"
   ) %>%
-  arrange(trade_date)
+  arrange(trade_date) %>%
+  mutate(
+    close_prev = lag(close_last),
+    close_diff = close_last - close_prev,
+    close_pct  = abs(close_diff / close_prev)   # tamanho da queda em proporcao
+  )
 
-# Diferenca de fechamento dia a dia: close(D+1) - close(D)
-daily_close <- daily_close %>%
-  mutate(close_diff = close_last - lag(close_last))   # negativo = queda
-
-# Fallback robusto para o indice global do ultimo minuto de cada dia
-# (evita dependencia do join acima que pode falhar em datasets grandes)
 dt1_indexed <- dt1 %>%
   mutate(
     global_idx = row_number(),
@@ -144,63 +132,89 @@ last_idx_per_day <- dt1_indexed %>%
 daily_close <- daily_close %>%
   left_join(last_idx_per_day, by = "trade_date")
 
-# --- Passo 2: 3 dias com maior queda de fechamento (mais negativo) ---
-# Separacao minima: o indice global do ultimo minuto do dia nao pode
-# estar a menos de MIN_CRASH_SEP observacoes de um crash ja escolhido.
-find_top3_crash_days <- function(daily_df, min_sep) {
-  selected <- integer(0)        # indices de linha em daily_df
+# --- seleção dos crashes com filtro de 15%, apenas queda real, max 8 eventos ---
+find_top_crash_days <- function(daily_df, min_sep, min_pct, max_events) {
+  selected <- integer(0)
   tmp_diff <- daily_df$close_diff
 
-  for (k in 1:3) {
-    # ignora dias sem close_diff valido (primeiro dia da serie)
+  for (k in seq_len(nrow(daily_df))) {
+    if (length(selected) >= max_events) break
+
     best <- which.min(tmp_diff)
     if (length(best) == 0 || is.na(tmp_diff[best])) break
 
-    selected  <- c(selected, best)
-    ref_gidx  <- daily_df$last_global_idx[best]   # indice global de referencia
+    # rejeita se nao for queda real
+    # rejeita se a queda for menor que 15%
+    if (is.na(daily_df$close_pct[best]) ||
+        is.na(daily_df$close_diff[best]) ||
+        daily_df$close_diff[best] >= 0 ||
+        daily_df$close_pct[best] < min_pct) {
+      tmp_diff[best] <- NA
+      next
+    }
 
-    # mascara dias proximos (pela distancia em indice global do ultimo minuto)
+    selected <- c(selected, best)
+    ref_gidx <- daily_df$last_global_idx[best]
+
     too_close <- abs(daily_df$last_global_idx - ref_gidx) < min_sep
     tmp_diff[too_close] <- NA
   }
-  sort(selected)   # ordena cronologicamente
+
+  sort(selected)
 }
 
-crash_day_rows <- find_top3_crash_days(daily_close, MIN_CRASH_SEP)
-crash_days     <- daily_close$trade_date[crash_day_rows]
+crash_day_rows <- find_top_crash_days(
+  daily_close,
+  MIN_CRASH_SEP,
+  MIN_CRASH_PCT,
+  MAX_CRASHES
+)
 
-cat("Dias de crash identificados pela maior queda de fechamento:\n")
+crash_days <- daily_close$trade_date[crash_day_rows]
+
+cat("Dias de crash identificados:\n")
 print(data.frame(
-  rank        = seq_along(crash_day_rows),
-  data        = as.character(crash_days),
-  close_diff  = round(daily_close$close_diff[crash_day_rows], 4),
-  close_pct   = round(daily_close$close_diff[crash_day_rows] /
-                        (daily_close$close_last[crash_day_rows] -
-                         daily_close$close_diff[crash_day_rows]) * 100, 4)
+  rank       = seq_along(crash_day_rows),
+  data       = as.character(crash_days),
+  close_diff = round(daily_close$close_diff[crash_day_rows], 4),
+  close_pct  = round(daily_close$close_pct[crash_day_rows] * 100, 4)
 ))
 
-# --- Passo 3: para cada dia de crash, indice global do minuto com menor retorno ---
+# --- índice do crash com filtro de +50k pontos futuros e apenas retorno negativo ---
 crash_idx_vec <- sapply(crash_days, function(d) {
   day_rows <- dt1_indexed %>% filter(trade_date == d)
   if (nrow(day_rows) == 0) return(NA_integer_)
-  # minuto de menor retorno dentro do dia
-  local_min  <- which.min(day_rows$Ret.1min)
-  day_rows$global_idx[local_min]
+
+  local_min <- which.min(day_rows$Ret.1min)
+  idx <- day_rows$global_idx[local_min]
+
+  # rejeita se o ponto minimo do dia nao for uma queda de verdade
+  if (is.na(day_rows$Ret.1min[local_min]) || day_rows$Ret.1min[local_min] >= 0) {
+    return(NA_integer_)
+  }
+
+  # filtro de dados futuros suficientes
+  if ((idx + MIN_FUTURE_IDX) > n_total) return(NA_integer_)
+
+  idx
 })
+
 crash_idx_vec <- sort(as.integer(crash_idx_vec[!is.na(crash_idx_vec)]))
 
-# --- Funcao auxiliar: constroi janela segura sem extrapolar limites ---
+# --- função de janela segura ---
 safe_window <- function(start, end, n_max) {
-  s <- max(1L,     as.integer(start))
-  e <- min(n_max,  as.integer(end))
+  s <- max(1L, as.integer(start))
+  e <- min(n_max, as.integer(end))
   if (s > e) return(NULL)
   s:e
 }
 
-# --- Constroi os 9 janelamentos (3 eventos x 3 fases) ---
-events <- vector("list", 3)
-for (k in 1:3) {
+# --- eventos ---
+events <- vector("list", length(crash_idx_vec))
+
+for (k in seq_along(crash_idx_vec)) {
   X <- crash_idx_vec[k]
+
   events[[k]] <- list(
     crash_idx   = X,
     crash_date  = dt1$Period[X],
@@ -212,26 +226,30 @@ for (k in 1:3) {
   )
 }
 
-# --- Sumario dos eventos ---
+# --- resumo ---
 crash_summary <- do.call(rbind, lapply(events, function(ev) {
   data.frame(
     evento      = ev$event_label,
     idx_crash   = ev$crash_idx,
     data_crash  = format(ev$crash_date, "%Y-%m-%d %H:%M"),
     retorno_pct = round(ev$crash_ret * 100, 4),
-    n_pre       = if (!is.null(ev$pre))    length(ev$pre)    else NA_integer_,
-    n_during    = if (!is.null(ev$during)) length(ev$during) else NA_integer_,
-    n_post      = if (!is.null(ev$post))   length(ev$post)   else NA_integer_
+    n_pre       = if (!is.null(ev$pre))    length(ev$pre)    else NA,
+    n_during    = if (!is.null(ev$during)) length(ev$during) else NA,
+    n_post      = if (!is.null(ev$post))   length(ev$post)   else NA
   )
 }))
-knitr::kable(crash_summary,
-             caption = "3 Maiores Quedas Identificadas e Janelamentos (IBM)")
 
-# --- Visualizacao: serie completa marcando os 3 crashes ---
+knitr::kable(
+  crash_summary,
+  caption = "Crashes (>15%) com janela valida (>=50k pontos futuros)"
+)
+
+# --- visualização ---
 crash_mark <- data.frame(
   x     = sapply(events, `[[`, "crash_idx"),
   label = sapply(events, `[[`, "event_label")
 )
+
 ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
        aes(x = index, y = price)) +
   geom_line(color = "black", linewidth = 0.3) +
@@ -242,13 +260,204 @@ ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
              aes(x = x,
                  y = max(dt1$Close.1min, na.rm = TRUE) * 0.97,
                  label = label, color = label),
-             size = 3, show.legend = FALSE) +
-  scale_color_manual(values = c("#E74C3C", "#F39C12", "#8E44AD")) +
-  labs(title  = "IBM - Serie Completa com os 3 Maiores Crashes Identificados",
-       x = "Indice (observacao)", y = "Preco de Fechamento",
-       color = "Evento") +
+             size = 5, show.legend = FALSE) +
+  scale_color_manual(values = c("#E74C3C", "#F39C12", "#8E44AD", "#2E44AD",
+                                "#1133AD", "#FEEE12", "#F39AAA", "#FFFFF2")) +
+  labs(
+    title = "IBM - Crashes (>15%) com Dados Futuros Suficientes",
+    x = "Indice (observacao)",
+    y = "Preco de Fechamento",
+    color = "Evento"
+  ) +
   theme_minimal(base_size = 12) +
   theme(plot.title = element_text(face = "bold"))
+```
+
+## Deteccao de Quebras Estruturais: Bai-Perron e PELT
+
+```{r detect-structural-breaks}
+# ============================================================
+# Trabalha na serie diaria de retornos (computacionalmente viavel
+# e economicamente adequado para detectar quebras estruturais).
+# daily_close ja existe com last_global_idx mapeado.
+# ============================================================
+
+dc_clean <- daily_close %>%
+  filter(!is.na(close_diff), !is.na(close_prev), close_prev > 0) %>%
+  mutate(daily_ret = close_diff / close_prev)
+
+ret_daily <- dc_clean$daily_ret
+n_daily   <- length(ret_daily)
+
+cat(sprintf("Serie diaria base: %d observacoes (%s a %s)\n",
+            n_daily,
+            format(min(dc_clean$trade_date)),
+            format(max(dc_clean$trade_date))))
+
+# ============================================================
+# BAI-PERRON — Top 5 quebras estruturais na media dos retornos
+# crash_idx_vec_2
+# ============================================================
+bp_fit     <- strucchange::breakpoints(ret_daily ~ 1, breaks = 5)
+bp_row_idx <- bp_fit$breakpoints   # indices de linha em dc_clean
+
+crash_idx_vec_2 <- sort(as.integer(Filter(Negate(is.na), sapply(bp_row_idx, function(i) {
+  g <- dc_clean$last_global_idx[i]
+  if (is.na(g) || (g + MIN_FUTURE_IDX) > n_total) return(NA_integer_)
+  as.integer(g)
+}))))
+
+bp_summary <- data.frame(
+  rank       = seq_along(bp_row_idx),
+  trade_date = dc_clean$trade_date[bp_row_idx],
+  daily_ret  = round(ret_daily[bp_row_idx] * 100, 4),
+  global_idx = dc_clean$last_global_idx[bp_row_idx],
+  retained   = dc_clean$last_global_idx[bp_row_idx] %in% crash_idx_vec_2
+)
+
+cat("\nBai-Perron — 5 quebras na media dos retornos diarios (crash_idx_vec_2):\n")
+print(knitr::kable(bp_summary,
+                   col.names = c("Rank", "Data", "Ret diario (%)",
+                                 "Idx global", "Retido (dados futuros ok)"),
+                   caption = "Bai-Perron: quebras estruturais na media"))
+cat("crash_idx_vec_2:", crash_idx_vec_2, "\n")
+
+# ============================================================
+# PELT — Top 5 quebras estruturais na variancia dos retornos
+# crash_idx_vec_3
+# ============================================================
+pelt_fit     <- changepoint::cpt.var(
+  ret_daily,
+  method  = "PELT",
+  penalty = "BIC",
+  Q       = 5
+)
+pelt_row_idx <- changepoint::cpts(pelt_fit)
+
+# Se PELT retornar mais de 5, seleciona as 5 com maior mudanca de variancia
+if (length(pelt_row_idx) > 5) {
+  w  <- 30L
+  dv <- sapply(pelt_row_idx, function(i) {
+    v1 <- var(ret_daily[max(1L, i - w):i],              na.rm = TRUE)
+    v2 <- var(ret_daily[i:min(n_daily, i + w)],         na.rm = TRUE)
+    abs(v2 - v1)
+  })
+  pelt_row_idx <- sort(pelt_row_idx[order(dv, decreasing = TRUE)[seq_len(5)]])
+}
+
+crash_idx_vec_3 <- sort(as.integer(Filter(Negate(is.na), sapply(pelt_row_idx, function(i) {
+  g <- dc_clean$last_global_idx[i]
+  if (is.na(g) || (g + MIN_FUTURE_IDX) > n_total) return(NA_integer_)
+  as.integer(g)
+}))))
+
+pelt_summary <- data.frame(
+  rank       = seq_along(pelt_row_idx),
+  trade_date = dc_clean$trade_date[pelt_row_idx],
+  daily_ret  = round(ret_daily[pelt_row_idx] * 100, 4),
+  global_idx = dc_clean$last_global_idx[pelt_row_idx],
+  retained   = dc_clean$last_global_idx[pelt_row_idx] %in% crash_idx_vec_3
+)
+
+cat("\nPELT — quebras na variancia dos retornos diarios (crash_idx_vec_3):\n")
+print(knitr::kable(pelt_summary,
+                   col.names = c("Rank", "Data", "Ret diario (%)",
+                                 "Idx global", "Retido (dados futuros ok)"),
+                   caption = "PELT (cpt.var): quebras estruturais na variancia"))
+cat("crash_idx_vec_3:", crash_idx_vec_3, "\n")
+
+# ============================================================
+# Visualizacao comparativa — 3 metodos
+# ============================================================
+price_max <- max(dt1$Close.1min, na.rm = TRUE)
+
+all_marks <- bind_rows(
+  data.frame(x      = crash_idx_vec,
+             metodo = "Original (custom)",
+             label  = paste0("O",  seq_along(crash_idx_vec)),
+             y_pos  = price_max * 0.97,
+             stringsAsFactors = FALSE),
+  data.frame(x      = crash_idx_vec_2,
+             metodo = "Bai-Perron",
+             label  = paste0("BP", seq_along(crash_idx_vec_2)),
+             y_pos  = price_max * 0.89,
+             stringsAsFactors = FALSE),
+  data.frame(x      = crash_idx_vec_3,
+             metodo = "PELT",
+             label  = paste0("PL", seq_along(crash_idx_vec_3)),
+             y_pos  = price_max * 0.81,
+             stringsAsFactors = FALSE)
+) %>%
+  mutate(metodo = factor(metodo,
+                         levels = c("Original (custom)", "Bai-Perron", "PELT")))
+
+print(
+  ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
+         aes(x = index, y = price)) +
+    geom_line(color = "black", linewidth = 0.3) +
+    geom_vline(data = all_marks,
+               aes(xintercept = x, color = metodo, linetype = metodo),
+               linewidth = 0.75, alpha = 0.85) +
+    geom_label(data = all_marks,
+               aes(x = x, y = y_pos, label = label, color = metodo),
+               size = 2.8, show.legend = FALSE) +
+    scale_color_manual(
+      values = c("Original (custom)" = "#E74C3C",
+                 "Bai-Perron"        = "#2980B9",
+                 "PELT"              = "#27AE60")
+    ) +
+    scale_linetype_manual(
+      values = c("Original (custom)" = "dashed",
+                 "Bai-Perron"        = "solid",
+                 "PELT"              = "dotdash")
+    ) +
+    labs(
+      title    = "IBM — Comparacao: Crashes (Custom) vs Quebras Estruturais (Bai-Perron / PELT)",
+      subtitle = "O = original | BP = Bai-Perron (media) | PL = PELT (variancia)",
+      x        = "Indice (observacao)",
+      y        = "Preco de Fechamento",
+      color    = "Metodo",
+      linetype = "Metodo"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"),
+          legend.position = "bottom")
+)
+```
+
+```{r price-segments-plot}
+fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
+
+for (ev in events) {
+  segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx)) return(NULL)
+    data.frame(janela = nm, xmin = idx[1] - 0.5, xmax = tail(idx, 1) + 0.5)
+  }))
+
+  # Zoom apenas na regiao de interesse
+  zoom_s <- max(1,       ev$crash_idx - 32000)
+  zoom_e <- min(n_total, ev$crash_idx + 42000)
+  plot_df <- data.frame(index = seq_len(n_total), price = dt1$Close.1min)[zoom_s:zoom_e, ]
+
+  print(
+    ggplot(plot_df, aes(x = index, y = price)) +
+      geom_rect(data = segs_df,
+                aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
+                inherit.aes = FALSE, alpha = 0.30) +
+      geom_line(color = "black", linewidth = 0.35) +
+      geom_vline(xintercept = ev$crash_idx, color = "red",
+                 linewidth = 0.9, linetype = "solid") +
+      scale_fill_manual(name = "Janela", values = fill_colors_seg) +
+      labs(title    = paste0(ev$event_label, " - Janelamentos sobre Preco IBM"),
+           subtitle = paste0("Linha vermelha = crash (", format(ev$crash_date, "%Y-%m-%d %H:%M"),
+                             ") | Ret: ", round(ev$crash_ret * 100, 3), "%"),
+           x = "Indice (observacao global)", y = "Preco de Fechamento") +
+      theme_minimal(base_size = 11) +
+      theme(plot.title = element_text(face = "bold"), legend.position = "top") +
+      coord_cartesian(expand = FALSE)
+  )
+}
 ```
 
 ```{r}
@@ -291,8 +500,8 @@ for (ev in events) {
   }))
 
   # Zoom apenas na regiao de interesse
-  zoom_s <- max(1,       ev$crash_idx - 22000)
-  zoom_e <- min(n_total, ev$crash_idx + 32000)
+  zoom_s <- max(1,       ev$crash_idx - 32000)
+  zoom_e <- min(n_total, ev$crash_idx + 42000)
   plot_df <- data.frame(index = seq_len(n_total), price = dt1$Close.1min)[zoom_s:zoom_e, ]
 
   print(

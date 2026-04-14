@@ -95,6 +95,8 @@ DUR_END_OFFSET    <-   9000
 POST_START_OFFSET <-  20000
 POST_END_OFFSET   <-  30000
 MIN_CRASH_SEP     <-  31000
+MIN_DROP_PCT      <-  -15.0   # queda minima para qualificar como crash (%)
+MIN_OBS_AHEAD     <-  50000   # minimo de observacoes apos X para incluir o evento
 
 n_total   <- nrow(dt1)
 rets_full <- dt1$Ret.1min
@@ -189,6 +191,43 @@ crash_idx_vec <- sapply(crash_days, function(d) {
 })
 crash_idx_vec <- sort(as.integer(crash_idx_vec[!is.na(crash_idx_vec)]))
 
+# --- Filtro 1: remove crashes cuja queda diaria foi menor que MIN_DROP_PCT% ---
+# Recalcula close_pct para cada crash (queda percentual no dia identificado)
+crash_pct_vec <- sapply(seq_along(crash_days), function(i) {
+  row_i     <- crash_day_rows[i]
+  diff_val  <- daily_close$close_diff[row_i]
+  prev_close <- daily_close$close_last[row_i] - diff_val   # close do dia anterior
+  if (prev_close == 0 || is.na(prev_close)) return(NA_real_)
+  (diff_val / prev_close) * 100   # percentual; negativo = queda
+})
+
+keep_pct <- !is.na(crash_pct_vec) & (crash_pct_vec <= MIN_DROP_PCT)
+if (any(!keep_pct)) {
+  cat(sprintf("  [Filtro DROP_PCT] Removidos %d crash(es) com queda < %.0f%%:\n",
+              sum(!keep_pct), abs(MIN_DROP_PCT)))
+  for (i in which(!keep_pct))
+    cat(sprintf("    -> %s  (queda = %.2f%%)\n", crash_days[i], crash_pct_vec[i]))
+}
+crash_idx_vec <- crash_idx_vec[keep_pct]
+crash_days    <- crash_days[keep_pct]
+
+# --- Filtro 2: remove crashes sem MIN_OBS_AHEAD observacoes no futuro ---
+# Necessario para garantir que a janela POST_END_OFFSET nao fique truncada
+keep_future <- (n_total - crash_idx_vec) >= MIN_OBS_AHEAD
+if (any(!keep_future)) {
+  cat(sprintf("  [Filtro OBS_AHEAD] Removidos %d crash(es) perto do fim da serie:\n",
+              sum(!keep_future)))
+  for (i in which(!keep_future))
+    cat(sprintf("    -> idx=%d  obs restantes=%d  (minimo=%d)\n",
+                crash_idx_vec[i], n_total - crash_idx_vec[i], MIN_OBS_AHEAD))
+}
+crash_idx_vec <- crash_idx_vec[keep_future]
+crash_days    <- crash_days[keep_future]
+
+n_events <- length(crash_idx_vec)
+cat(sprintf("\nEventos validos apos filtros: %d\n", n_events))
+if (n_events == 0) stop("Nenhum evento sobreviveu aos filtros. Ajuste MIN_DROP_PCT ou MIN_OBS_AHEAD.")
+
 # --- Funcao auxiliar: constroi janela segura sem extrapolar limites ---
 safe_window <- function(start, end, n_max) {
   s <- max(1L,     as.integer(start))
@@ -197,9 +236,9 @@ safe_window <- function(start, end, n_max) {
   s:e
 }
 
-# --- Constroi os 9 janelamentos (3 eventos x 3 fases) ---
-events <- vector("list", 3)
-for (k in 1:3) {
+# --- Constroi os janelamentos (n_events x 3 fases) ---
+events <- vector("list", n_events)
+for (k in seq_len(n_events)) {
   X <- crash_idx_vec[k]
   events[[k]] <- list(
     crash_idx   = X,
@@ -655,9 +694,9 @@ summarize_draws <- function(v)
   c(mean = mean(v), median = median(v), sd = sd(v),
     q2.5 = quantile(v, .025), q97.5 = quantile(v, .975))
 
-ann_draws_all <- vector("list", 3)
+ann_draws_all <- vector("list", n_events)
 
-for (k in 1:3) {
+for (k in seq_len(n_events)) {
   ev  <- events[[k]]
   mdl <- sv_models[[k]]
 
@@ -1236,4 +1275,164 @@ consolidated %>%
        x = "Janela", y = "Vol. Anualizada (aprox.)", color = "Evento") +
   theme_minimal(base_size = 13) +
   theme(plot.title = element_text(face = "bold"))
+```
+
+## Deteccao de Quebras Estruturais (Bai-Perron e PELT)
+
+```{r detect-structural-breaks}
+# ============================================================
+# Trabalha na serie diaria de retornos (computacionalmente viavel
+# e economicamente adequado para detectar quebras estruturais).
+# daily_close ja existe com last_global_idx mapeado.
+# ============================================================
+
+MIN_FUTURE_IDX <- POST_END_OFFSET   # mesmo offset maximo de janelamento
+
+dc_clean <- daily_close %>%
+  filter(!is.na(close_diff), !is.na(last_global_idx)) %>%
+  mutate(
+    close_prev = close_last - close_diff,              # preco do dia anterior
+    daily_ret  = ifelse(close_prev > 0,
+                        close_diff / close_prev,
+                        NA_real_)
+  ) %>%
+  filter(!is.na(daily_ret))
+
+ret_daily <- dc_clean$daily_ret
+n_daily   <- length(ret_daily)
+
+cat(sprintf("Serie diaria base: %d observacoes (%s a %s)\n",
+            n_daily,
+            format(min(dc_clean$trade_date)),
+            format(max(dc_clean$trade_date))))
+
+# ============================================================
+# Funcao auxiliar: mapeia indices de linha em dc_clean para
+# indices globais na serie intradiaria, filtrando observacoes
+# que nao possuem dados futuros suficientes.
+# Usa ifelse vetorizado — sem || em vetores.
+# ============================================================
+map_to_global <- function(row_idx_vec) {
+  g_vec      <- dc_clean$last_global_idx[row_idx_vec]   # vetor de indices globais
+  has_future <- !is.na(g_vec) & ((n_total - g_vec) >= MIN_FUTURE_IDX)
+  sort(as.integer(g_vec[has_future]))
+}
+
+# ============================================================
+# BAI-PERRON — Top 5 quebras estruturais na media dos retornos
+# ============================================================
+bp_fit     <- strucchange::breakpoints(ret_daily ~ 1, breaks = 5)
+bp_row_idx <- bp_fit$breakpoints
+bp_row_idx <- bp_row_idx[!is.na(bp_row_idx)]   # remove NAs da saida do strucchange
+
+crash_idx_bp <- map_to_global(bp_row_idx)
+
+bp_summary <- data.frame(
+  rank       = seq_along(bp_row_idx),
+  trade_date = dc_clean$trade_date[bp_row_idx],
+  daily_ret  = round(ret_daily[bp_row_idx] * 100, 4),
+  global_idx = dc_clean$last_global_idx[bp_row_idx],
+  retained   = dc_clean$last_global_idx[bp_row_idx] %in% crash_idx_bp
+)
+cat("\nBai-Perron — quebras na media dos retornos diarios:\n")
+print(knitr::kable(bp_summary,
+                   col.names = c("Rank","Data","Ret diario (%)","Idx global","Retido"),
+                   caption   = "Bai-Perron: quebras estruturais na media"))
+cat("crash_idx_bp:", crash_idx_bp, "\n")
+
+# ============================================================
+# PELT — Top 5 quebras estruturais na variancia dos retornos
+# ============================================================
+pelt_fit     <- changepoint::cpt.var(
+  ret_daily,
+  method  = "PELT",
+  penalty = "BIC",
+  Q       = 5
+)
+pelt_row_idx <- changepoint::cpts(pelt_fit)
+
+# Se PELT retornar mais de 5, seleciona as 5 com maior mudanca de variancia
+if (length(pelt_row_idx) > 5) {
+  w  <- 30L
+  dv <- vapply(pelt_row_idx, function(i) {
+    v1 <- var(ret_daily[max(1L, i - w):i],            na.rm = TRUE)
+    v2 <- var(ret_daily[i:min(n_daily, i + w)],       na.rm = TRUE)
+    abs(v2 - v1)
+  }, numeric(1))
+  pelt_row_idx <- sort(pelt_row_idx[order(dv, decreasing = TRUE)[seq_len(5)]])
+}
+pelt_row_idx <- pelt_row_idx[!is.na(pelt_row_idx)]
+
+crash_idx_pelt <- map_to_global(pelt_row_idx)
+
+pelt_summary <- data.frame(
+  rank       = seq_along(pelt_row_idx),
+  trade_date = dc_clean$trade_date[pelt_row_idx],
+  daily_ret  = round(ret_daily[pelt_row_idx] * 100, 4),
+  global_idx = dc_clean$last_global_idx[pelt_row_idx],
+  retained   = dc_clean$last_global_idx[pelt_row_idx] %in% crash_idx_pelt
+)
+cat("\nPELT — quebras na variancia dos retornos diarios:\n")
+print(knitr::kable(pelt_summary,
+                   col.names = c("Rank","Data","Ret diario (%)","Idx global","Retido"),
+                   caption   = "PELT (cpt.var): quebras estruturais na variancia"))
+cat("crash_idx_pelt:", crash_idx_pelt, "\n")
+
+# ============================================================
+# Visualizacao comparativa — metodo original vs Bai-Perron vs PELT
+# ============================================================
+price_max <- max(dt1$Close.1min, na.rm = TRUE)
+
+all_marks <- bind_rows(
+  data.frame(x      = crash_idx_vec,
+             metodo = "Original (custom)",
+             label  = paste0("O",  seq_along(crash_idx_vec)),
+             y_pos  = price_max * 0.97,
+             stringsAsFactors = FALSE),
+  data.frame(x      = crash_idx_bp,
+             metodo = "Bai-Perron",
+             label  = paste0("BP", seq_along(crash_idx_bp)),
+             y_pos  = price_max * 0.89,
+             stringsAsFactors = FALSE),
+  data.frame(x      = crash_idx_pelt,
+             metodo = "PELT",
+             label  = paste0("PL", seq_along(crash_idx_pelt)),
+             y_pos  = price_max * 0.81,
+             stringsAsFactors = FALSE)
+) %>%
+  mutate(metodo = factor(metodo,
+                         levels = c("Original (custom)", "Bai-Perron", "PELT")))
+
+print(
+  ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
+         aes(x = index, y = price)) +
+    geom_line(color = "black", linewidth = 0.3) +
+    geom_vline(data = all_marks,
+               aes(xintercept = x, color = metodo, linetype = metodo),
+               linewidth = 0.75, alpha = 0.85) +
+    geom_label(data = all_marks,
+               aes(x = x, y = y_pos, label = label, color = metodo),
+               size = 2.8, show.legend = FALSE) +
+    scale_color_manual(
+      values = c("Original (custom)" = "#E74C3C",
+                 "Bai-Perron"        = "#2980B9",
+                 "PELT"              = "#27AE60")
+    ) +
+    scale_linetype_manual(
+      values = c("Original (custom)" = "dashed",
+                 "Bai-Perron"        = "solid",
+                 "PELT"              = "dotdash")
+    ) +
+    labs(
+      title    = "IBM — Comparacao: Crashes (Custom) vs Quebras Estruturais (Bai-Perron / PELT)",
+      subtitle = "O = original | BP = Bai-Perron (media) | PL = PELT (variancia)",
+      x        = "Indice (observacao)",
+      y        = "Preco de Fechamento",
+      color    = "Metodo",
+      linetype = "Metodo"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(plot.title    = element_text(face = "bold"),
+          legend.position = "bottom")
+)
 ```
