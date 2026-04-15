@@ -280,9 +280,9 @@ map_to_global <- function(row_idx_vec) {
 >
 > Dado um ponto de quebra candidato $\tau$ na serie $\{y_t\}_{t=1}^{n}$, o teste de Chow verifica se a media do processo muda antes e depois de $\tau$.
 >
-> **Estatistica F:** $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$ onde: - $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global) - $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias) - $k = 1$ (somente intercepto)
+> **Estatistica F:** $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$ onde: - $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global) - $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ residuos do modelo irrestrito (2 medias) - $k = 1$ (somente intercepto)
 >
-> **Hipoteses:** - $H_0$: $\mu_1 = \mu_2$ (sem quebra — mesma media em todo o periodo) - $H_1$: $\mu_1 \neq \mu_2$ (quebra estrutural na media em $\tau$)
+> **Hipoteses:** - $H_0$: $\mu_1 = \mu_2$ (sem quebra mesma media em todo o periodo) - $H_1$: $\mu_1 \neq \mu_2$ (quebra estrutural na media em $\tau$)
 >
 > **O que detecta:** mudancas abruptas e permanentes no nivel medio dos retornos em um ponto fixo previamente especificado. Nao e adequado para detectar quebras em volatilidade .
 
@@ -346,19 +346,17 @@ knitr::kable(chow_tbl,
 
 ## Raiz Unitaria com Quebra Estrutural (Zivot-Andrews)
 
-> **Teste de Zivot-Andrews (1992) - Raiz Unitaria com Quebra Endogena**
+> **Teste de Zivot-Andrews (1992) — Raiz Unitaria com Quebra Endogena**
 >
-> Extende o teste ADF permitindo uma **quebra estrutural endogena** na tendencia ou no intercepto. O modelo mais geral ("both") estima: $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$ $y_t$ - valor da série no tempo $t$ $\mu$ - intercepto (nível médio inicial) $\beta t$ - tendência temporal $DU_t$ - dummy de quebra no nível: $DU_t = 1$ se $t > \tau$, 0 caso contrário $\theta$ - magnitude da mudança na média após a quebra $DT_t$ - dummy de quebra na tendência: $DT_t = (t - \tau)$ se $t > \tau$, 0 caso contrário $\gamma$ -mudança na inclinação da tendência após a quebra $\alpha y_{t-1}$ - componente de raiz unitária (persistência da série) $\Delta y_{t-i}$ - diferenças defasadas (correção de autocorrelação) $c_i$ - coeficientes das defasagens $k$ - número de defasagens incluídas $\varepsilon_t$ - termo de erro (ruído)
-
-> onde: - $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ - dummy de quebra no intercepto - $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ - dummy de quebra na tendencia - $\lambda \in (0,1)$ - fracao do periodo onde ocorre a quebra
+> Extende o teste ADF permitindo uma **quebra estrutural endogena** na tendencia ou no intercepto. O modelo mais geral ("both") estima: $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$ onde: - $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto - $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia - $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
 >
 > O ponto de quebra $\hat{\tau}$ e aquele que **minimiza a estatistica** $t$ do coeficiente $\gamma$, ou seja, onde a evidencia contra a raiz unitaria e maxima: $$\hat{\tau} = \arg\min_{\tau} t_{\hat{\gamma}}(\tau)$$
 >
-> **Hipoteses:** - $H_0$: $\gamma = 0$ - raiz unitaria sem quebra estrutural - $H_1$: $\gamma < 0$ - processo estacionario com quebra estrutural em $\hat{\tau}$
+> **Hipoteses:** - $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural - $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
 >
 > **Valores criticos:** -5.57 (1%), -5.08 (5%), -4.82 (10%) para o modelo "both". Rejeita $H_0$ se $|t_{\hat{\gamma}}| > |\text{valor critico}|$.
 >
-> **O que detecta:** o maior ponto de ruptura estrutural na serie de precos (I(1)), identificando o evento que mais abala a hipotese de raiz unitaria pura tipicamente grandes crises de mercado.
+> **O que detecta:** o maior ponto de ruptura estrutural na serie de precos (I(1)), identificando o evento que mais abala a hipotese de raiz unitaria pura — tipicamente grandes crises de mercado.
 
 ```{r unit-root-za}
 # Teste de Zivot-Andrews (1992):
@@ -423,7 +421,7 @@ cat(sprintf("Indice global intradiario (crash_idx_za): %s\n",
 # Entrada: ret_daily (retornos diarios, estacionarios).
 # Estacionariedade e necessaria para validade do procedimento.
 
-bp_fit     <- strucchange::breakpoints(abs(ret_daily) ~ 1, breaks = 4, h = 0.05)
+bp_fit     <- strucchange::breakpoints(abs(ret_daily) ~ 1, breaks = 2, h = 0.05)
 bp_row_idx <- bp_fit$breakpoints
 bp_row_idx <- bp_row_idx[!is.na(bp_row_idx)]
 
@@ -516,157 +514,6 @@ cat("crash_idx_pelt:", crash_idx_pelt, "\n")
 > **O que detecta:** se a volatilidade muda de regime (nivel, reacao e persistencia) entre os periodos pre-quebra e pos-quebra do PELT, complementando o Teste de Chow que opera apenas na media.
 
 ```{r arch-garch-test}
-
-# Use os pontos de quebra do PELT como entrada para ARCH/GARCH.
-# Cada ponto em index_crash e tratado como o centro de um evento.
-index_crash <- crash_idx_za
-
-events_pelt <- lapply(seq_along(index_crash), function(k) {
-  X <- index_crash[k]
-  list(
-    crash_idx   = X,
-    crash_date  = dt1$Period[X],
-    crash_ret   = rets_full[X],
-    event_label = paste0("Evento_", k),
-    pre    = safe_window(X + PRE_START_OFFSET,  X + PRE_END_OFFSET,  n_total),
-    during = safe_window(X + DUR_START_OFFSET,  X + DUR_END_OFFSET,  n_total),
-    post   = safe_window(X + POST_START_OFFSET, X + POST_END_OFFSET, n_total)
-  )
-})
-
-# Para cada ponto de quebra identificado pelo PELT:
-#   1. Aplica o Teste ARCH-LM (q=5) nos retornos do segmento
-#      pre (X-10000:X) e do segmento pos (X:X+10000).
-#   2. Estima um GARCH(1,1) em cada segmento e reporta
-#      omega, alpha, beta e alpha+beta (persistencia).
-#   3. Testa se alpha+beta do pos e significativamente diferente
-#      do pre (teste de Wald via rugarch).
-
-arch_garch_results <- lapply(seq_along(events_pelt), function(k) {
-  ev      <- events_pelt[[k]]
-  lab     <- ev$event_label
-
-  # Segmentos de retornos intradiarios (serie completa, minuto a minuto)
-  r_pre   <- as.numeric(na.omit(rets_full[ev$pre]))
-  r_post  <- as.numeric(na.omit(rets_full[ev$post]))
-
-  run_arch_lm <- function(r, lag = 5) {
-    if (length(r) < lag + 10) return(list(stat = NA_real_, pval = NA_real_))
-    tryCatch({
-      fit  <- FinTS::ArchTest(r, lags = lag)
-      list(stat = unname(fit$statistic), pval = fit$p.value)
-    }, error = function(e) list(stat = NA_real_, pval = NA_real_))
-  }
-
-  run_garch11 <- function(r) {
-    if (length(r) < 50) return(NULL)
-    tryCatch({
-      spec <- rugarch::ugarchspec(
-        variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
-        mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE),
-        distribution.model = "norm"
-      )
-      fit <- rugarch::ugarchfit(spec, data = r, solver = "hybrid",
-                                solver.control = list(trace = 0))
-      cf  <- rugarch::coef(fit)
-      list(
-        omega = unname(cf["omega"]),
-        alpha = unname(cf["alpha1"]),
-        beta  = unname(cf["beta1"]),
-        persistence = unname(cf["alpha1"]) + unname(cf["beta1"]),
-        loglik = rugarch::likelihood(fit)
-      )
-    }, error = function(e) NULL)
-  }
-
-  arch_pre  <- run_arch_lm(r_pre)
-  arch_post <- run_arch_lm(r_post)
-  g_pre     <- run_garch11(r_pre)
-  g_post    <- run_garch11(r_post)
-
-  list(
-    evento     = lab,
-    crash_date = format(ev$crash_date, "%Y-%m-%d"),
-    arch_pre   = arch_pre,
-    arch_post  = arch_post,
-    garch_pre  = g_pre,
-    garch_post = g_post
-  )
-})
-
-# ---- Tabela 1: Teste ARCH-LM (q=5) pre vs pos ----
-arch_tbl <- do.call(rbind, lapply(arch_garch_results, function(x) {
-  data.frame(
-    evento          = x$evento,
-    crash_date      = x$crash_date,
-    ARCH_LM_pre     = round(x$arch_pre$stat,  4),
-    p_pre           = round(x$arch_pre$pval,  6),
-    ARCH_LM_post    = round(x$arch_post$stat, 4),
-    p_post          = round(x$arch_post$pval, 6),
-    efeito_pre      = ifelse(!is.na(x$arch_pre$pval)  & x$arch_pre$pval  < 0.05, "Sim", "Nao"),
-    efeito_post     = ifelse(!is.na(x$arch_post$pval) & x$arch_post$pval < 0.05, "Sim", "Nao")
-  )
-}))
-
-cat("=== Teste ARCH-LM (lags=5) — pre vs pos PELT ===\n")
-cat("H0: sem efeito ARCH (variancia constante)  |  Rejeitar H0 se p < 0.05\n\n")
-knitr::kable(arch_tbl,
-             col.names = c("Evento","Data Crash",
-                           "LM (pre)","p (pre)","LM (pos)","p (pos)",
-                           "ARCH pre?","ARCH pos?"),
-             caption   = "Teste ARCH-LM(5): clustering de volatilidade pre vs pos PELT")
-
-# ---- Tabela 2: Parametros GARCH(1,1) pre vs pos ----
-garch_tbl <- do.call(rbind, lapply(arch_garch_results, function(x) {
-  gp <- x$garch_pre;  go <- x$garch_post
-  data.frame(
-    evento         = x$evento,
-    crash_date     = x$crash_date,
-    omega_pre      = if (!is.null(gp)) round(gp$omega,       6) else NA_real_,
-    alpha_pre      = if (!is.null(gp)) round(gp$alpha,       4) else NA_real_,
-    beta_pre       = if (!is.null(gp)) round(gp$beta,        4) else NA_real_,
-    persist_pre    = if (!is.null(gp)) round(gp$persistence, 4) else NA_real_,
-    omega_post     = if (!is.null(go)) round(go$omega,       6) else NA_real_,
-    alpha_post     = if (!is.null(go)) round(go$alpha,       4) else NA_real_,
-    beta_post      = if (!is.null(go)) round(go$beta,        4) else NA_real_,
-    persist_post   = if (!is.null(go)) round(go$persistence, 4) else NA_real_
-  )
-}))
-
-cat("\n=== GARCH(1,1) — parametros por segmento (sigma^2_t = omega + alpha*e^2_{t-1} + beta*sigma^2_{t-1}) ===\n")
-cat("Persistencia = alpha + beta  (proximo de 1 = volatilidade de longa duracao)\n\n")
-knitr::kable(garch_tbl,
-             col.names = c("Evento","Data",
-                           "omega (pre)","alpha (pre)","beta (pre)","persist. (pre)",
-                           "omega (pos)","alpha (pos)","beta (pos)","persist. (pos)"),
-             caption = "GARCH(1,1): nivel, reacao e persistencia de volatilidade pre vs pos PELT")
-
-# ---- Visualizacao: persistencia pre vs pos ----
-gg_df <- garch_tbl %>%
-  select(evento, persist_pre, persist_post) %>%
-  tidyr::pivot_longer(cols = c(persist_pre, persist_post),
-                      names_to  = "fase",
-                      values_to = "persistencia") %>%
-  mutate(fase = ifelse(fase == "persist_pre", "pre", "post"),
-         fase = factor(fase, levels = c("pre", "post")))
-
-print(
-  ggplot(gg_df, aes(x = evento, y = persistencia, fill = fase)) +
-    geom_col(position = "dodge", width = 0.6, alpha = 0.85) +
-    geom_hline(yintercept = 1, linetype = "dashed", color = "red", linewidth = 0.7) +
-    scale_fill_manual(values = c(pre = "#2ECC71", post = "#E74C3C")) +
-    labs(
-      title    = "GARCH(1,1) — Persistencia de Volatilidade (alpha + beta) por PELT",
-      subtitle = "Linha vermelha = limite de estacionariedade (alpha+beta = 1)",
-      x = "Evento", y = "alpha + beta", fill = "Fase"
-    ) +
-    theme_minimal(base_size = 12) +
-    theme(axis.text.x = element_text(angle = 30, hjust = 1),
-          plot.title  = element_text(face = "bold"))
-)
-```
-
-```{r arch-garch-test-2}
 
 # Use os pontos de quebra do PELT como entrada para ARCH/GARCH.
 # Cada ponto em index_crash e tratado como o centro de um evento.
@@ -892,7 +739,7 @@ print(
 #   crash_idx_pelt — PELT (quebras na variancia)
 #   crash_idx_za   — Zivot-Andrews (breakpoint endogeno)
 
-active_crash_vec <- crash_idx_bp   # <-- ALTERE AQUI
+active_crash_vec <- crash_idx_pelt   # <-- ALTERE AQUI
 
 # ---- top 5 do vetor escolhido ----
 top5_vec <- head(active_crash_vec, 5)
@@ -948,4 +795,163 @@ for (ev in events_viz) {
       coord_cartesian(expand = FALSE)
   )
 }
+```
+
+
+## Teste ARCH/GARCH: Mudancas de Volatilidade nos Pontos de Crash
+
+> **Teste ARCH-LM (Engle, 1982) Efeito ARCH / Clustering de Volatilidade**
+>
+> O Multiplicador de Lagrange de Engle testa se os quadrados dos residuos $\hat{\varepsilon}_t^2$ possuem autocorrelacao, o que indica que a variancia nao e constante ao longo do tempo (heterocedasticidade condicional).
+>
+> O modelo ARCH(q) postula: $$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i\,\varepsilon_{t-i}^2$$
+>
+> O teste LM regride $\hat{\varepsilon}_t^2$ em suas $q$ defasagens: $$LM = n \cdot R^2 \sim \chi^2(q)$$
+>
+> -   $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ (sem efeito ARCH — variancia constante)
+> -   $H_1$: pelo menos um $\alpha_i \neq 0$ (volatilidade dependente do passado)
+>
+> **O que detecta:** presenca de *clusters* de volatilidade, periodos onde movimentos grandes tendem a ser seguidos de movimentos grandes. Rejeitar $H_0$ confirma que a volatilidade e heterocedástica e justifica o uso de modelos GARCH.
+
+> **Modelo GARCH(1,1) (Bollerslev, 1986) — Volatilidade Condicional**
+>
+> Generaliza o ARCH incorporando defasagens da propria variancia condicional: $$\sigma_t^2 = \omega + \alpha\,\varepsilon_{t-1}^2 + \beta\,\sigma_{t-1}^2$$
+>
+> Parametros estimados por MLE para cada segmento ao redor de cada crash: - $\omega > 0$: nivel base de volatilidade - $\alpha \geq 0$: reacao a choques recentes (**efeito ARCH**) - $\beta \geq 0$: persistencia da volatilidade (**memoria**) - $\alpha + \beta < 1$: condicao de estacionariedade da variancia condicional
+>
+> **O que detecta:** se a volatilidade muda de regime (nivel, reacao e persistencia) entre os periodos pre-crash e pos-crash, complementando o Teste de Chow que opera apenas na media.
+
+```{r arch-garch-test}
+
+# Para cada crash identificado pelo algoritmo custom:
+#   1. Aplica o Teste ARCH-LM (q=5) nos retornos do segmento
+#      pre (X-10000:X) e do segmento pos (X:X+10000).
+#   2. Estima um GARCH(1,1) em cada segmento e reporta
+#      omega, alpha, beta e alpha+beta (persistencia).
+#   3. Testa se alpha+beta do pos e significativamente diferente
+#      do pre (teste de Wald via rugarch).
+
+
+arch_garch_results <- lapply(seq_along(events), function(k) {
+  ev      <- events[[k]]
+  lab     <- ev$event_label
+
+  # Segmentos de retornos intradiarios (serie completa, minuto a minuto)
+  r_pre   <- as.numeric(na.omit(rets_full[ev$pre]))
+  r_post  <- as.numeric(na.omit(rets_full[ev$post]))
+
+  run_arch_lm <- function(r, lag = 5) {
+    if (length(r) < lag + 10) return(list(stat = NA_real_, pval = NA_real_))
+    tryCatch({
+      fit  <- FinTS::ArchTest(r, lags = lag)
+      list(stat = unname(fit$statistic), pval = fit$p.value)
+    }, error = function(e) list(stat = NA_real_, pval = NA_real_))
+  }
+
+  run_garch11 <- function(r) {
+    if (length(r) < 50) return(NULL)
+    tryCatch({
+      spec <- rugarch::ugarchspec(
+        variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+        mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE),
+        distribution.model = "norm"
+      )
+      fit <- rugarch::ugarchfit(spec, data = r, solver = "hybrid",
+                                solver.control = list(trace = 0))
+      cf  <- rugarch::coef(fit)
+      list(
+        omega = unname(cf["omega"]),
+        alpha = unname(cf["alpha1"]),
+        beta  = unname(cf["beta1"]),
+        persistence = unname(cf["alpha1"]) + unname(cf["beta1"]),
+        loglik = rugarch::likelihood(fit)
+      )
+    }, error = function(e) NULL)
+  }
+
+  arch_pre  <- run_arch_lm(r_pre)
+  arch_post <- run_arch_lm(r_post)
+  g_pre     <- run_garch11(r_pre)
+  g_post    <- run_garch11(r_post)
+
+  list(
+    evento     = lab,
+    crash_date = format(ev$crash_date, "%Y-%m-%d"),
+    arch_pre   = arch_pre,
+    arch_post  = arch_post,
+    garch_pre  = g_pre,
+    garch_post = g_post
+  )
+})
+
+# ---- Tabela 1: Teste ARCH-LM (q=5) pre vs pos ----
+arch_tbl <- do.call(rbind, lapply(arch_garch_results, function(x) {
+  data.frame(
+    evento          = x$evento,
+    crash_date      = x$crash_date,
+    ARCH_LM_pre     = round(x$arch_pre$stat,  4),
+    p_pre           = round(x$arch_pre$pval,  6),
+    ARCH_LM_post    = round(x$arch_post$stat, 4),
+    p_post          = round(x$arch_post$pval, 6),
+    efeito_pre      = ifelse(!is.na(x$arch_pre$pval)  & x$arch_pre$pval  < 0.05, "Sim", "Nao"),
+    efeito_post     = ifelse(!is.na(x$arch_post$pval) & x$arch_post$pval < 0.05, "Sim", "Nao")
+  )
+}))
+
+cat("=== Teste ARCH-LM (lags=5) — pre vs pos crash ===\n")
+cat("H0: sem efeito ARCH (variancia constante)  |  Rejeitar H0 se p < 0.05\n\n")
+knitr::kable(arch_tbl,
+             col.names = c("Evento","Data Crash",
+                           "LM (pre)","p (pre)","LM (pos)","p (pos)",
+                           "ARCH pre?","ARCH pos?"),
+             caption   = "Teste ARCH-LM(5): clustering de volatilidade pre vs pos crash")
+
+# ---- Tabela 2: Parametros GARCH(1,1) pre vs pos ----
+garch_tbl <- do.call(rbind, lapply(arch_garch_results, function(x) {
+  gp <- x$garch_pre;  go <- x$garch_post
+  data.frame(
+    evento         = x$evento,
+    crash_date     = x$crash_date,
+    omega_pre      = if (!is.null(gp)) round(gp$omega,       6) else NA_real_,
+    alpha_pre      = if (!is.null(gp)) round(gp$alpha,       4) else NA_real_,
+    beta_pre       = if (!is.null(gp)) round(gp$beta,        4) else NA_real_,
+    persist_pre    = if (!is.null(gp)) round(gp$persistence, 4) else NA_real_,
+    omega_post     = if (!is.null(go)) round(go$omega,       6) else NA_real_,
+    alpha_post     = if (!is.null(go)) round(go$alpha,       4) else NA_real_,
+    beta_post      = if (!is.null(go)) round(go$beta,        4) else NA_real_,
+    persist_post   = if (!is.null(go)) round(go$persistence, 4) else NA_real_
+  )
+}))
+
+cat("\n=== GARCH(1,1) — parametros por segmento (sigma^2_t = omega + alpha*e^2_{t-1} + beta*sigma^2_{t-1}) ===\n")
+cat("Persistencia = alpha + beta  (proximo de 1 = volatilidade de longa duracao)\n\n")
+knitr::kable(garch_tbl,
+             col.names = c("Evento","Data",
+                           "omega (pre)","alpha (pre)","beta (pre)","persist. (pre)",
+                           "omega (pos)","alpha (pos)","beta (pos)","persist. (pos)"),
+             caption = "GARCH(1,1): nivel, reacao e persistencia de volatilidade pre vs pos crash")
+
+# ---- Visualizacao: persistencia pre vs pos ----
+gg_df <- garch_tbl %>%
+  select(evento, persist_pre, persist_post) %>%
+  tidyr::pivot_longer(cols = c(persist_pre, persist_post),
+                      names_to  = "fase",
+                      values_to = "persistencia") %>%
+  mutate(fase = ifelse(fase == "persist_pre", "pre", "post"),
+         fase = factor(fase, levels = c("pre", "post")))
+
+print(
+  ggplot(gg_df, aes(x = evento, y = persistencia, fill = fase)) +
+    geom_col(position = "dodge", width = 0.6, alpha = 0.85) +
+    geom_hline(yintercept = 1, linetype = "dashed", color = "red", linewidth = 0.7) +
+    scale_fill_manual(values = c(pre = "#2ECC71", post = "#E74C3C")) +
+    labs(
+      title    = "GARCH(1,1) — Persistencia de Volatilidade (alpha + beta) por Crash",
+      subtitle = "Linha vermelha = limite de estacionariedade (alpha+beta = 1)",
+      x = "Evento", y = "alpha + beta", fill = "Fase"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          plot.title  = element_text(face = "bold"))
+)
 ```
