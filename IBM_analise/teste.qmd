@@ -166,21 +166,13 @@ safe_window <- function(start, end, n_max) {
 
 > **Bai-Perron (1998, 2003) — Multiplas Quebras na Media**
 >
-> Generaliza o Teste de Chow para **m quebras simultaneas desconhecidas**.
-> O modelo linear com $m$ quebras e:
-> $$y_t = \mathbf{x}_t' \boldsymbol{\beta}_j + \varepsilon_t, \quad t = T_{j-1}+1, \ldots, T_j, \quad j = 1,\ldots,m+1$$
-> onde os pontos $T_1 < T_2 < \cdots < T_m$ sao **estimados conjuntamente** por:
-> $$\{\hat{T}_1, \ldots, \hat{T}_m\} = \arg\min_{T_1,\ldots,T_m} \sum_{j=1}^{m+1} \sum_{t=T_{j-1}+1}^{T_j} (y_t - \bar{y}_j)^2$$
+> Generaliza o Teste de Chow para **m quebras simultaneas desconhecidas**. O modelo linear com $m$ quebras e: $$y_t = \mathbf{x}_t' \boldsymbol{\beta}_j + \varepsilon_t, \quad t = T_{j-1}+1, \ldots, T_j, \quad j = 1,\ldots,m+1$$ onde os pontos $T_1 < T_2 < \cdots < T_m$ sao **estimados conjuntamente** por: $$\{\hat{T}_1, \ldots, \hat{T}_m\} = \arg\min_{T_1,\ldots,T_m} \sum_{j=1}^{m+1} \sum_{t=T_{j-1}+1}^{T_j} (y_t - \bar{y}_j)^2$$
 >
-> O numero otimo de quebras $m^*$ e selecionado pelo criterio BIC ou pelo
-> teste sequencial de Bai-Perron, que controla a probabilidade de detectar
-> quebras espurias. A busca e feita por programacao dinamica em $O(n^2)$.
+> O numero otimo de quebras $m^*$ e selecionado pelo criterio BIC ou pelo teste sequencial de Bai-Perron, que controla a probabilidade de detectar quebras espurias. A busca e feita por programacao dinamica em $O(n^2)$.
 >
-> **Entrada:** $|r_t|$ (valor absoluto dos retornos diarios), que e proporcional
-> a volatilidade e estacionario, tornando o procedimento valido.
+> **Entrada:** $|r_t|$ (valor absoluto dos retornos diarios), que e proporcional a volatilidade e estacionario, tornando o procedimento valido.
 >
-> **O que detecta:** mudancas persistentes e significativas no **nivel medio
-> de volatilidade** ao longo de multiplos periodos sem datas pre-fixadas.
+> **O que detecta:** mudancas persistentes e significativas no **nivel medio de volatilidade** ao longo de multiplos periodos sem datas pre-fixadas.
 
 ```{r bai-perron}
 # Aplicado a |ret_daily| para capturar mudancas de nivel de volatilidade.
@@ -232,37 +224,25 @@ ggplot(data.frame(t = seq_len(n_daily), y = abs(ret_daily)),
 
 > **Teste de Zivot-Andrews (1992) — Raiz Unitaria com Quebra Endogena**
 >
-> Extende o teste ADF permitindo uma **quebra estrutural endogena** na
-> tendencia ou no intercepto. O modelo mais geral ("both") estima:
-> $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$
-> onde:
+> Extende o teste ADF permitindo uma **quebra estrutural endogena** na tendencia ou no intercepto. O modelo mais geral ("both") estima: $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$ onde:
 >
-> - $y_t$ — valor da serie (log-preco) no tempo $t$
-> - $\beta t$ — tendencia temporal linear
-> - $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto
-> - $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia
-> - $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
-> - $\gamma$ — coeficiente de persistencia (raiz unitaria se $\gamma = 0$)
+> -   $y_t$ — valor da serie (log-preco) no tempo $t$
+> -   $\beta t$ — tendencia temporal linear
+> -   $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto
+> -   $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia
+> -   $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
+> -   $\gamma$ — coeficiente de persistencia (raiz unitaria se $\gamma = 0$)
 >
-> O ponto de quebra $\hat{\tau}$ e aquele que **minimiza a estatistica $t$** do
-> coeficiente $\gamma$, ou seja, onde a evidencia contra a raiz unitaria e maxima:
-> $$\hat{\tau} = \arg\min_{\tau} t_{\hat{\gamma}}(\tau)$$
+> O ponto de quebra $\hat{\tau}$ e aquele que **minimiza a estatistica** $t$ do coeficiente $\gamma$, ou seja, onde a evidencia contra a raiz unitaria e maxima: $$\hat{\tau} = \arg\min_{\tau} t_{\hat{\gamma}}(\tau)$$
 >
 > **Hipoteses:**
 >
-> - $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural
-> - $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
+> -   $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural
+> -   $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
 >
-> **Valores criticos:** -5.57 (1%), -5.08 (5%), -4.82 (10%) para o modelo "both".
-> Rejeita $H_0$ se $|t_{\hat{\gamma}}| > |\text{valor critico}|$.
+> **Valores criticos:** -5.57 (1%), -5.08 (5%), -4.82 (10%) para o modelo "both". Rejeita $H_0$ se $|t_{\hat{\gamma}}| > |\text{valor critico}|$.
 >
-> **Estrategia iterativa:** apos identificar o primeiro breakpoint na serie
-> completa, o modelo e reaplicado na sub-serie **antes** desse ponto
-> (`log_price[1:bp1]`), encontrando a quebra mais relevante no trecho anterior.
-> O processo e repetido sobre a sub-serie antes do segundo breakpoint
-> (`log_price[1:bp2]`), obtendo 3 breakpoints que caminham do evento mais
-> recente em direcao ao passado — util para identificar crises historicas
-> que precederam e possivelmente causaram o regime detectado na serie completa.
+> **Estrategia iterativa:** apos identificar o primeiro breakpoint na serie completa, o modelo e reaplicado na sub-serie **antes** desse ponto (`log_price[1:bp1]`), encontrando a quebra mais relevante no trecho anterior. O processo e repetido sobre a sub-serie antes do segundo breakpoint (`log_price[1:bp2]`), obtendo 3 breakpoints que caminham do evento mais recente em direcao ao passado — util para identificar crises historicas que precederam e possivelmente causaram o regime detectado na serie completa.
 
 ```{r unit-root-za}
 # ============================================================
@@ -365,25 +345,20 @@ ggplot(data.frame(t = seq_len(n_daily), lp = log_price),
 
 > **Teste de Chow (1960) — Quebra na Media**
 >
-> Dado um ponto de quebra candidato $\tau$ na serie $\{y_t\}_{t=1}^{n}$,
-> o teste de Chow verifica se a media do processo muda antes e depois de $\tau$.
+> Dado um ponto de quebra candidato $\tau$ na serie $\{y_t\}_{t=1}^{n}$, o teste de Chow verifica se a media do processo muda antes e depois de $\tau$.
 >
-> **Estatistica F:**
-> $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$
-> onde:
+> **Estatistica F:** $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$ onde:
 >
-> - $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global)
-> - $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias)
-> - $k = 1$ (somente intercepto)
+> -   $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global)
+> -   $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias)
+> -   $k = 1$ (somente intercepto)
 >
 > **Hipoteses:**
 >
-> - $H_0$: $\mu_1 = \mu_2$ — sem quebra (mesma media em todo o periodo)
-> - $H_1$: $\mu_1 \neq \mu_2$ — quebra estrutural na media em $\tau$
+> -   $H_0$: $\mu_1 = \mu_2$ — sem quebra (mesma media em todo o periodo)
+> -   $H_1$: $\mu_1 \neq \mu_2$ — quebra estrutural na media em $\tau$
 >
-> Aplicado aqui sobre os **retornos diarios** em cada breakpoint identificado
-> por Bai-Perron e por Zivot-Andrews. O teste valida se os pontos detectados
-> correspondem a mudancas reais e estatisticamente significativas na media.
+> Aplicado aqui sobre os **retornos diarios** em cada breakpoint identificado por Bai-Perron e por Zivot-Andrews. O teste valida se os pontos detectados correspondem a mudancas reais e estatisticamente significativas na media.
 
 ```{r chow-test}
 chow_mean <- function(y, bp) {
@@ -464,34 +439,20 @@ ggplot(chow_tbl %>% filter(!is.na(F_stat)),
 
 > **Teste ARCH-LM (Engle, 1982) — Clustering de Volatilidade**
 >
-> O Multiplicador de Lagrange de Engle testa se os quadrados dos residuos
-> $\hat{\varepsilon}_t^2$ possuem autocorrelacao, o que indica heterocedasticidade
-> condicional (variancia nao constante ao longo do tempo).
+> O Multiplicador de Lagrange de Engle testa se os quadrados dos residuos $\hat{\varepsilon}_t^2$ possuem autocorrelacao, o que indica heterocedasticidade condicional (variancia nao constante ao longo do tempo).
 >
-> O modelo ARCH(q) postula:
-> $$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i\,\varepsilon_{t-i}^2$$
+> O modelo ARCH(q) postula: $$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i\,\varepsilon_{t-i}^2$$
 >
-> O teste LM regride $\hat{\varepsilon}_t^2$ em suas $q$ defasagens:
-> $$LM = n \cdot R^2 \;\sim\; \chi^2(q)$$
+> O teste LM regride $\hat{\varepsilon}_t^2$ em suas $q$ defasagens: $$LM = n \cdot R^2 \;\sim\; \chi^2(q)$$
 >
 > **Hipoteses:**
 >
-> - $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
-> - $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
+> -   $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
+> -   $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
 >
-> **Calibracao:** O numero de defasagens e fixado em $q = 5$, correspondendo
-> a 5 minutos de retornos intradiarios. Esse valor captura o efeito de
-> *clustering* de curto prazo tipico em mercados de alta frequencia, sem
-> introduzir ruido de defasagens longas. A janela de analise e de 10.000
-> observacoes (aprox. 26 dias de pregao) antes e depois de cada breakpoint,
-> garantindo dados suficientes para estimacao robusta da estatistica LM.
-> O nivel de significancia adotado e $\alpha = 0.05$.
+> **Calibracao:** O numero de defasagens e fixado em $q = 5$, correspondendo a 5 minutos de retornos intradiarios. Esse valor captura o efeito de *clustering* de curto prazo tipico em mercados de alta frequencia, sem introduzir ruido de defasagens longas. A janela de analise e de 10.000 observacoes (aprox. 26 dias de pregao) antes e depois de cada breakpoint, garantindo dados suficientes para estimacao robusta da estatistica LM. O nivel de significancia adotado e $\alpha = 0.05$.
 >
-> **O que detecta:** presenca de *clusters* de volatilidade — periodos onde
-> movimentos grandes tendem a ser seguidos de movimentos grandes. Rejeitar
-> $H_0$ confirma que a volatilidade e heterocedástica e que os retornos em
-> torno do breakpoint nao sao i.i.d., o que valida a relevancia do ponto
-> de quebra do ponto de vista da dinamica de risco.
+> **O que detecta:** presenca de *clusters* de volatilidade — periodos onde movimentos grandes tendem a ser seguidos de movimentos grandes. Rejeitar $H_0$ confirma que a volatilidade e heterocedástica e que os retornos em torno do breakpoint nao sao i.i.d., o que valida a relevancia do ponto de quebra do ponto de vista da dinamica de risco.
 
 ```{r arch-test}
 run_arch_lm <- function(r, lag = 5) {
