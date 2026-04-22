@@ -1,4 +1,6 @@
+# HEAVILY OUTDATED DOC
 # Stochastic Volatility Analysis of Intraday Returns
+
 
 This repository contains two Quarto (`.qmd`) reports analysing stochastic volatility and intraday return dynamics around market crash events, using 1-minute tick data. Both reports are rendered to HTML and follow a common analytical pipeline, applied to different assets and markets.
 
