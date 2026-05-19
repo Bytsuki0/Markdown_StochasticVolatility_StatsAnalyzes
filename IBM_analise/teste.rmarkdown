@@ -1,4 +1,4 @@
----ak
+---
 title: "On going IBM"
 format: html
 editor: visual
@@ -464,3 +464,4 @@ plot_windows_for_h(crash_idx_bp,     "h = 0.05", "#2980B9")
 plot_windows_for_h(crash_idx_bp_h10, "h = 0.10", "#E67E22")
 plot_windows_for_h(crash_idx_bp_h01, "h = 0.01", "#27AE60")
 ```
+
