@@ -88,7 +88,14 @@ boxplot(as.double(ret.1min),
 ## Preparacao da Serie Diaria de Retornos
 
 ```{r daily-returns-prep}
-
+# ============================================================
+# Serie diaria de retornos: base comum para Bai-Perron e
+# Zivot-Andrews. Retornos garantem estacionariedade.
+# Janelas continuas para todos os eventos:
+#   pre    = [X - 10000, X      ]
+#   during = [X        , X+10000]
+#   post   = [X + 10000, X+20000]
+# ============================================================
 PRE_START_OFFSET  <- -10000
 PRE_END_OFFSET    <-      0
 DUR_START_OFFSET  <-      0
@@ -100,7 +107,7 @@ MIN_FUTURE_IDX    <-  20000   # minimo de obs apos X para manter o ponto
 n_total   <- nrow(dt1)
 rets_full <- dt1$Ret.1min
 
-
+# ---- serie de fechamentos diarios ----
 daily_close <- dt1 %>%
   mutate(trade_date = as.Date(Period)) %>%
   group_by(trade_date) %>%
@@ -170,7 +177,7 @@ safe_window <- function(start, end, n_max) {
 ```{r bai-perron}
 # Aplicado a |ret_daily| para capturar mudancas de nivel de volatilidade.
 # h = 0.05 -> segmento minimo de 5% da amostra (~350 dias).
-bp_fit     <- strucchange::breakpoints(abs(ret_daily) ~ 1, breaks = 4, h = 0.05)
+bp_fit     <- strucchange::breakpoints(abs(ret_daily) ~ 1, breaks = 3, h = 0.05)
 bp_row_idx <- bp_fit$breakpoints
 bp_row_idx <- bp_row_idx[!is.na(bp_row_idx)]
 
@@ -219,37 +226,23 @@ ggplot(data.frame(t = seq_len(n_daily), y = abs(ret_daily)),
 >
 > Extende o teste ADF permitindo uma **quebra estrutural endogena** na tendencia ou no intercepto. O modelo mais geral ("both") estima: $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$ onde:
 >
-<<<<<<< HEAD
-> - $y_t$ — valor da serie (log-preco) no tempo $t$
-> - $\beta t$ — tendencia temporal linear
-> - $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto
-> - $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia
-> - $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
-> - $\gamma$ — coeficiente de persistencia (raiz unitaria se $\gamma = 0$)
-=======
 > -   $y_t$ — valor da serie (log-preco) no tempo $t$
 > -   $\beta t$ — tendencia temporal linear
 > -   $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto
 > -   $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia
 > -   $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
 > -   $\gamma$ — coeficiente de persistencia (raiz unitaria se $\gamma = 0$)
->>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
 >
 > O ponto de quebra $\hat{\tau}$ e aquele que **minimiza a estatistica** $t$ do coeficiente $\gamma$, ou seja, onde a evidencia contra a raiz unitaria e maxima: $$\hat{\tau} = \arg\min_{\tau} t_{\hat{\gamma}}(\tau)$$
 >
 > **Hipoteses:**
 >
-<<<<<<< HEAD
-> - $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural
-> - $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
-=======
 > -   $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural
 > -   $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
->>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
 >
 > **Valores criticos:** -5.57 (1%), -5.08 (5%), -4.82 (10%) para o modelo "both". Rejeita $H_0$ se $|t_{\hat{\gamma}}| > |\text{valor critico}|$.
 >
-> **Estrategia iterativa:** apos identificar o primeiro breakpoint na serie completa, o modelo e reaplicado na sub-serie **antes** desse ponto (`log_price[1:bp1]`), encontrando a quebra mais relevante no trecho anterior. O processo e repetido sobre a sub-serie antes do segundo breakpoint (`log_price[1:bp2]`), obtendo 3 breakpoints que caminham do evento mais recente em direcao ao passado — util para identificar crises historicas que precederam e possivelmente causaram o regime detectado na serie completa.
+> **Estrategia iterativa:** apos identificar o primeiro breakpoint na serie completa, o modelo e reaplicado na sub-serie **apos** esse ponto, encontrando a quebra mais relevante no trecho restante. O processo e repetido ate obter 3 breakpoints distintos, capturando crises sequenciais ao longo de toda a historia da IBM.
 
 ```{r unit-root-za}
 # ============================================================
@@ -356,16 +349,6 @@ ggplot(data.frame(t = seq_len(n_daily), lp = log_price),
 >
 > **Estatistica F:** $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$ onde:
 >
-<<<<<<< HEAD
-> - $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global)
-> - $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias)
-> - $k = 1$ (somente intercepto)
->
-> **Hipoteses:**
->
-> - $H_0$: $\mu_1 = \mu_2$ — sem quebra (mesma media em todo o periodo)
-> - $H_1$: $\mu_1 \neq \mu_2$ — quebra estrutural na media em $\tau$
-=======
 > -   $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global)
 > -   $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias)
 > -   $k = 1$ (somente intercepto)
@@ -374,7 +357,6 @@ ggplot(data.frame(t = seq_len(n_daily), lp = log_price),
 >
 > -   $H_0$: $\mu_1 = \mu_2$ — sem quebra (mesma media em todo o periodo)
 > -   $H_1$: $\mu_1 \neq \mu_2$ — quebra estrutural na media em $\tau$
->>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
 >
 > Aplicado aqui sobre os **retornos diarios** em cada breakpoint identificado por Bai-Perron e por Zivot-Andrews. O teste valida se os pontos detectados correspondem a mudancas reais e estatisticamente significativas na media.
 
@@ -465,13 +447,8 @@ ggplot(chow_tbl %>% filter(!is.na(F_stat)),
 >
 > **Hipoteses:**
 >
-<<<<<<< HEAD
-> - $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
-> - $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
-=======
 > -   $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
 > -   $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
->>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
 >
 > **Calibracao:** O numero de defasagens e fixado em $q = 5$, correspondendo a 5 minutos de retornos intradiarios. Esse valor captura o efeito de *clustering* de curto prazo tipico em mercados de alta frequencia, sem introduzir ruido de defasagens longas. A janela de analise e de 10.000 observacoes (aprox. 26 dias de pregao) antes e depois de cada breakpoint, garantindo dados suficientes para estimacao robusta da estatistica LM. O nivel de significancia adotado e $\alpha = 0.05$.
 >
@@ -618,8 +595,12 @@ print(
 ## Visualizacao: Janelamentos dos Breakpoints
 
 ```{r price-segments-plot}
-
-active_crash_vec <- crash_idx_za  
+# ============================================================
+# Escolha o vetor a visualizar (altere APENAS esta linha):
+#   crash_idx_bp — Bai-Perron (quebras na media de |ret|)
+#   crash_idx_za — Zivot-Andrews iterativo (log-preco)
+# ============================================================
+active_crash_vec <- crash_idx_za   # <-- ALTERE AQUI
 
 top5_vec <- head(active_crash_vec, 5)
 
@@ -674,3 +655,4 @@ for (ev in events_viz) {
   )
 }
 ```
+

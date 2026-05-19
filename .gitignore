@@ -17,7 +17,11 @@ IBM_analise/sv_ibm_e2_post.rds
 IBM_analise/sv_ibm_e2_pre.rds
 IBM_analise/sv_ibm_e3_during.rds
 IBM_analise/sv_ibm_e3_pre.rds
+<<<<<<< HEAD
 IBM_analise/Ibm.RData
 IBM_analise\.RData
 IBM_analise\sv_ibm_e3_post.rds
 IBM_analise/.RData
+=======
+IBM_analise/Ibm.RData
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
