@@ -18,3 +18,5 @@ IBM_analise/sv_ibm_e2_pre.rds
 IBM_analise/sv_ibm_e3_during.rds
 IBM_analise/sv_ibm_e3_pre.rds
 IBM_analise/Ibm.RData
+IBM_analise\.RData
+IBM_analise\sv_ibm_e3_post.rds
