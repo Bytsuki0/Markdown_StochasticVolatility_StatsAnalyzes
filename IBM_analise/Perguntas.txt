@@ -1,0 +1,4 @@
+comparação de volatilidade realizada com estocástica é correto
+qual numero mínimo de obserções em volatilidade estocastica
+estocastica é melhor em diario ou intra
+qual modelo de comparação de volatilidade estocastica

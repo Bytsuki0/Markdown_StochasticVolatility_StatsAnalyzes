@@ -1,0 +1,10 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/1312833/eaf4d65c24924e16828d4ba3f20833f9
+bundleId: https://api.rpubs.com/api/v1/document/1312833/eaf4d65c24924e16828d4ba3f20833f9
+url: http://rpubs.com/ByTsuki0/1312833
+version: 1

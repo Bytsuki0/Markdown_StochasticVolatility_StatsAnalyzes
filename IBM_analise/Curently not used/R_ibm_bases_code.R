@@ -1,0 +1,1148 @@
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(zoo)
+library(xts)
+library(forecast)
+library(lubridate)
+library(PerformanceAnalytics)
+library(quantmod)
+library(tseries)
+library(FinTS)
+library(stochvol)
+library(cowplot)
+library(wavelets)
+library(gridExtra)
+library(broom)
+library(rugarch)
+library(moments)
+library(coda)
+library(car)
+library(boot)
+library(knitr)
+
+
+
+dt.intra <- read.csv(
+  "IBM_data.csv",
+  header           = TRUE,
+  stringsAsFactors = FALSE,
+  sep              = ",",
+  dec              = "."
+)
+
+dt.intra$Period <- mdy_hm(paste(dt.intra$Date, dt.intra$Time))
+
+dt1 <- as_tibble(dt.intra) %>%
+  arrange(Period) %>%
+  filter(!(hour(Period) == 9 & minute(Period) < 40)) %>%
+  filter(hour(Period) < 16) %>%
+  filter(!(hour(Period) == 15 & minute(Period) >= 56)) %>%
+  group_by(date(Period)) %>%
+  filter(n() > 100) %>%
+  ungroup() %>%
+  arrange(Period) %>%
+  mutate(
+    Ret.1min   = (Close - lag(Close)) / lag(Close),
+    Close.1min = Close
+  ) %>%
+  filter(!is.na(Ret.1min))
+
+ret_sd   <- sd(dt1$Ret.1min, na.rm = TRUE)
+ret_mean <- mean(dt1$Ret.1min, na.rm = TRUE)
+outlier_mask <- abs(dt1$Ret.1min - ret_mean) > 10 * ret_sd
+dt1$Ret.1min[outlier_mask] <- NA
+dt1$Ret.1min <- zoo::na.locf(dt1$Ret.1min, na.rm = FALSE)
+
+ret.1min <- as.xts(dt1$Ret.1min, order.by = dt1$Period)
+
+cat("Total de observacoes apos limpeza:", nrow(dt1), "\n")
+cat("Periodo:", format(min(dt1$Period)), "a", format(max(dt1$Period)), "\n")
+
+
+
+plot(dt1$Close.1min,
+     main = "IBM - Precos de Fechamento (1 min) - Serie Completa",
+     col  = "black", type = "l",
+     xlab = "Indice", ylab = "Preco")
+
+boxplot(as.double(ret.1min),
+        main = "Boxplot dos Retornos 1min - IBM (Serie Completa)",
+        ylab = "Retorno")
+
+
+PRE_START_OFFSET  <- -20000
+PRE_END_OFFSET    <- -10000
+DUR_START_OFFSET  <-  -1000
+DUR_END_OFFSET    <-   9000
+POST_START_OFFSET <-  20000
+POST_END_OFFSET   <-  30000
+MIN_CRASH_SEP     <-  31000
+
+n_total   <- nrow(dt1)
+rets_full <- dt1$Ret.1min
+
+# Passo 1: Para cada dia D calcular o preco de fechamento do dia
+#          (ultimo Close do pregao) e comparar com o fechamento
+#          do dia D+1. A diferenca close(D+1) - close(D) captura
+#          o gap overnight / queda diaria no preco da acao.
+#
+# Passo 2: Selecionar os 3 dias com a MAIOR QUEDA no fechamento
+#          (diferenca mais negativa), com separacao minima de
+#          MIN_CRASH_SEP observacoes entre eventos.
+#
+# Passo 3: Dentro de cada dia de crash selecionado, encontrar
+#          o indice global (na serie inteira dt1) do minuto
+#          com o MENOR RETORNO do dia — esse e o indice X
+#          usado nos janelamentos.
+# ============================================================
+
+daily_close <- dt1 %>%
+  mutate(trade_date = as.Date(Period)) %>%
+  group_by(trade_date) %>%
+  summarise(
+    close_last   = last(Close.1min),          # ultimo preco do dia
+    last_row_idx = last(row_number()) +        # posicao global na serie
+      (first(which(dt1$Period == first(Period))) - 1L),
+    .groups = "drop"
+  ) %>%
+  arrange(trade_date)
+
+# Diferenca de fechamento dia a dia: close(D+1) - close(D)
+daily_close <- daily_close %>%
+  mutate(close_diff = close_last - lag(close_last))   # negativo = queda
+
+# Fallback robusto para o indice global do ultimo minuto de cada dia
+# (evita dependencia do join acima que pode falhar em datasets grandes)
+dt1_indexed <- dt1 %>%
+  mutate(
+    global_idx = row_number(),
+    trade_date = as.Date(Period)
+  )
+
+last_idx_per_day <- dt1_indexed %>%
+  group_by(trade_date) %>%
+  summarise(last_global_idx = max(global_idx), .groups = "drop")
+
+daily_close <- daily_close %>%
+  left_join(last_idx_per_day, by = "trade_date")
+
+# --- Passo 2: 3 dias com maior queda de fechamento (mais negativo) ---
+# Separacao minima: o indice global do ultimo minuto do dia nao pode
+# estar a menos de MIN_CRASH_SEP observacoes de um crash ja escolhido.
+find_top3_crash_days <- function(daily_df, min_sep) {
+  selected <- integer(0)        # indices de linha em daily_df
+  tmp_diff <- daily_df$close_diff
+  
+  for (k in 1:3) {
+    # ignora dias sem close_diff valido (primeiro dia da serie)
+    best <- which.min(tmp_diff)
+    if (length(best) == 0 || is.na(tmp_diff[best])) break
+    
+    selected  <- c(selected, best)
+    ref_gidx  <- daily_df$last_global_idx[best]   # indice global de referencia
+    
+    # mascara dias proximos (pela distancia em indice global do ultimo minuto)
+    too_close <- abs(daily_df$last_global_idx - ref_gidx) < min_sep
+    tmp_diff[too_close] <- NA
+  }
+  sort(selected)   # ordena cronologicamente
+}
+
+crash_day_rows <- find_top3_crash_days(daily_close, MIN_CRASH_SEP)
+crash_days     <- daily_close$trade_date[crash_day_rows]
+
+cat("Dias de crash identificados pela maior queda de fechamento:\n")
+print(data.frame(
+  rank        = seq_along(crash_day_rows),
+  data        = as.character(crash_days),
+  close_diff  = round(daily_close$close_diff[crash_day_rows], 4),
+  close_pct   = round(daily_close$close_diff[crash_day_rows] /
+                        (daily_close$close_last[crash_day_rows] -
+                           daily_close$close_diff[crash_day_rows]) * 100, 4)
+))
+
+# --- Passo 3: para cada dia de crash, indice global do minuto com menor retorno ---
+crash_idx_vec <- sapply(crash_days, function(d) {
+  day_rows <- dt1_indexed %>% filter(trade_date == d)
+  if (nrow(day_rows) == 0) return(NA_integer_)
+  # minuto de menor retorno dentro do dia
+  local_min  <- which.min(day_rows$Ret.1min)
+  day_rows$global_idx[local_min]
+})
+crash_idx_vec <- sort(as.integer(crash_idx_vec[!is.na(crash_idx_vec)]))
+
+# --- Funcao auxiliar: constroi janela segura sem extrapolar limites ---
+safe_window <- function(start, end, n_max) {
+  s <- max(1L,     as.integer(start))
+  e <- min(n_max,  as.integer(end))
+  if (s > e) return(NULL)
+  s:e
+}
+
+# --- Constroi os 9 janelamentos (3 eventos x 3 fases) ---
+events <- vector("list", 3)
+for (k in 1:3) {
+  X <- crash_idx_vec[k]
+  events[[k]] <- list(
+    crash_idx   = X,
+    crash_date  = dt1$Period[X],
+    crash_ret   = rets_full[X],
+    event_label = paste0("Evento_", k),
+    pre         = safe_window(X + PRE_START_OFFSET,  X + PRE_END_OFFSET,  n_total),
+    during      = safe_window(X + DUR_START_OFFSET,  X + DUR_END_OFFSET,  n_total),
+    post        = safe_window(X + POST_START_OFFSET, X + POST_END_OFFSET, n_total)
+  )
+}
+
+# --- Sumario dos eventos ---
+crash_summary <- do.call(rbind, lapply(events, function(ev) {
+  data.frame(
+    evento      = ev$event_label,
+    idx_crash   = ev$crash_idx,
+    data_crash  = format(ev$crash_date, "%Y-%m-%d %H:%M"),
+    retorno_pct = round(ev$crash_ret * 100, 4),
+    n_pre       = if (!is.null(ev$pre))    length(ev$pre)    else NA_integer_,
+    n_during    = if (!is.null(ev$during)) length(ev$during) else NA_integer_,
+    n_post      = if (!is.null(ev$post))   length(ev$post)   else NA_integer_
+  )
+}))
+knitr::kable(crash_summary,
+             caption = "3 Maiores Quedas Identificadas e Janelamentos (IBM)")
+
+# --- Visualizacao: serie completa marcando os 3 crashes ---
+crash_mark <- data.frame(
+  x     = sapply(events, `[[`, "crash_idx"),
+  label = sapply(events, `[[`, "event_label")
+)
+ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
+       aes(x = index, y = price)) +
+  geom_line(color = "black", linewidth = 0.3) +
+  geom_vline(data = crash_mark,
+             aes(xintercept = x, color = label),
+             linetype = "dashed", linewidth = 0.8) +
+  geom_label(data = crash_mark,
+             aes(x = x,
+                 y = max(dt1$Close.1min, na.rm = TRUE) * 0.97,
+                 label = label, color = label),
+             size = 3, show.legend = FALSE) +
+  scale_color_manual(values = c("#E74C3C", "#F39C12", "#8E44AD")) +
+  labs(title  = "IBM - Serie Completa com os 3 Maiores Crashes Identificados",
+       x = "Indice (observacao)", y = "Preco de Fechamento",
+       color = "Evento") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))\
+
+
+ggplot(
+  subset(
+    data.frame(
+      index = seq_len(n_total),
+      price = dt1$Close.1min
+    ),
+    index >= 2300000
+  ),
+  aes(x = index, y = price)
+) +
+  geom_line(color = "black", linewidth = 0.3) +
+  geom_vline(data = crash_mark,
+             aes(xintercept = x, color = label),
+             linetype = "dashed", linewidth = 0.8) +
+  geom_label(data = crash_mark,
+             aes(x = x,
+                 y = max(dt1$Close.1min, na.rm = TRUE) * 0.97,
+                 label = label, color = label),
+             size = 3, show.legend = FALSE) +
+  scale_color_manual(values = c("#E74C3C", "#F39C12", "#8E44AD")) +
+  labs(title  = "IBM - Série Subset",
+       x = "Índice (observação)",
+       y = "Preço de Fechamento",
+       color = "Evento") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+
+
+
+
+fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
+
+for (ev in events) {
+  segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx)) return(NULL)
+    data.frame(janela = nm, xmin = idx[1] - 0.5, xmax = tail(idx, 1) + 0.5)
+  }))
+  
+  # Zoom apenas na regiao de interesse
+  zoom_s <- max(1,       ev$crash_idx - 22000)
+  zoom_e <- min(n_total, ev$crash_idx + 32000)
+  plot_df <- data.frame(index = seq_len(n_total), price = dt1$Close.1min)[zoom_s:zoom_e, ]
+  
+  print(
+    ggplot(plot_df, aes(x = index, y = price)) +
+      geom_rect(data = segs_df,
+                aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
+                inherit.aes = FALSE, alpha = 0.30) +
+      geom_line(color = "black", linewidth = 0.35) +
+      geom_vline(xintercept = ev$crash_idx, color = "red",
+                 linewidth = 0.9, linetype = "solid") +
+      scale_fill_manual(name = "Janela", values = fill_colors_seg) +
+      labs(title    = paste0(ev$event_label, " - Janelamentos sobre Preco IBM"),
+           subtitle = paste0("Linha vermelha = crash (", format(ev$crash_date, "%Y-%m-%d %H:%M"),
+                             ") | Ret: ", round(ev$crash_ret * 100, 3), "%"),
+           x = "Indice (observacao global)", y = "Preco de Fechamento") +
+      theme_minimal(base_size = 11) +
+      theme(plot.title = element_text(face = "bold"), legend.position = "top") +
+      coord_cartesian(expand = FALSE)
+  )
+}
+
+
+
+adf_results <- do.call(rbind, lapply(events, function(ev) {
+  janelas_nms <- c("pre", "during", "post")
+  do.call(rbind, lapply(janelas_nms, function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx) || length(idx) < 50) return(NULL)
+    r   <- na.omit(rets_full[idx])
+    res <- tseries::adf.test(r)
+    data.frame(
+      evento       = ev$event_label,
+      janela       = nm,
+      n            = length(r),
+      statistic    = round(res$statistic, 4),
+      p_value      = round(res$p.value,   4),
+      estacionario = ifelse(res$p.value < 0.05, "Sim", "Nao")
+    )
+  }))
+}))
+
+knitr::kable(adf_results,
+             caption = "ADF - Estacionariedade por Segmento (p < 0.05 = estacionario)")
+
+
+calc_vol_historica <- function(ret_vec, janela = 30) {
+  as.numeric(rollapply(zoo(ret_vec), width = janela,
+                       FUN   = function(x) sd(x, na.rm = TRUE),
+                       align = "right", fill  = NA))
+}
+
+minutos_ano <- 252 * 390
+
+for (ev in events) {
+  cat("\n====", ev$event_label, "| Crash:", format(ev$crash_date), "====\n")
+  for (nm in c("pre", "during", "post")) {
+    idx <- ev[[nm]]
+    if (is.null(idx) || length(idx) < 50) next
+    
+    r     <- na.omit(rets_full[idx])
+    log_r <- log(1 + r)
+    vol30 <- calc_vol_historica(log_r, 30)
+    
+    plot(vol30, type = "l",
+         main = paste0(ev$event_label, " [", nm, "] - Vol. Historica 30min"),
+         xlab = "Indice relativo", ylab = "Vol sd(log-ret)")
+    
+    par(mfrow = c(1, 2))
+    acf(log_r,  lag.max = 40, na.action = na.pass,
+        main = paste0("ACF  [", ev$event_label, " / ", nm, "]"))
+    pacf(log_r, lag.max = 40, na.action = na.pass,
+         main = paste0("PACF [", ev$event_label, " / ", nm, "]"))
+    par(mfrow = c(1, 1))
+  }
+}
+
+
+
+reduce_and_save <- function(obj, file_out, max_draws = 2000,
+                            keep_sample_of_vector = 50,
+                            thin_method = c("systematic", "random")) {
+  thin_method <- match.arg(thin_method)
+  orig_class  <- class(obj)
+  
+  get_idx <- function(n, max_r) {
+    if (thin_method == "systematic")
+      unique(round(seq(1, n, length.out = max_r)))
+    else { set.seed(1); sort(sample(n, max_r)) }
+  }
+  
+  for (nm in names(obj)) {
+    comp <- obj[[nm]]
+    
+    if ((is.matrix(comp) || is.data.frame(comp)) && is.numeric(as.matrix(comp))) {
+      nr <- nrow(comp)
+      if (nr > max_draws)
+        obj[[nm]] <- as.matrix(comp)[get_idx(nr, max_draws), , drop = FALSE]
+      
+    } else if (is.array(comp) && length(dim(comp)) >= 2 && is.numeric(comp)) {
+      nf <- dim(comp)[1]
+      if (nf > max_draws) {
+        idx <- get_idx(nf, max_draws)
+        sel <- rep(list(bquote()), length(dim(comp))); sel[[1]] <- idx
+        obj[[nm]] <- do.call(`[`, c(list(comp), sel, list(drop = FALSE)))
+      }
+      
+    } else if (is.list(comp)) {
+      for (subnm in names(comp)) {
+        subc <- comp[[subnm]]
+        nf   <- if (is.matrix(subc)) nrow(subc) else if (is.array(subc) && length(dim(subc)) >= 2) dim(subc)[1] else 0L
+        if (nf > max_draws && is.numeric(subc)) {
+          idx <- get_idx(nf, max_draws)
+          comp[[subnm]] <- if (is.matrix(subc)) subc[idx, , drop = FALSE] else subc[idx,,, drop = FALSE]
+        } else if (is.numeric(subc) && length(subc) > 10000) {
+          set.seed(1); smp <- sample(length(subc), min(keep_sample_of_vector, length(subc)))
+          comp[[subnm]] <- list(sample  = subc[smp],
+                                summary = c(mean   = mean(subc), sd = sd(subc),
+                                            median = median(subc),
+                                            q025   = quantile(subc, .025),
+                                            q975   = quantile(subc, .975)))
+        }
+      }
+      obj[[nm]] <- comp
+      
+    } else if (is.numeric(comp) && length(comp) > 50000) {
+      set.seed(1); smp <- sample(length(comp), min(keep_sample_of_vector, length(comp)))
+      obj[[nm]] <- list(sample  = comp[smp],
+                        summary = c(mean   = mean(comp), sd = sd(comp),
+                                    median = median(comp),
+                                    q025   = quantile(comp, .025),
+                                    q975   = quantile(comp, .975)))
+    }
+  }
+  class(obj) <- orig_class
+  saveRDS(obj, file = file_out, compress = "xz")
+  return(obj)
+}
+
+run_or_load_sv <- function(ret_seg, file_rds, draws = 5000, burnin = 1000, max_draws = 2000) {
+  if (file.exists(file_rds)) {
+    reduce_and_save(readRDS(file_rds), file_rds, max_draws = max_draws)
+  } else {
+    set.seed(123)
+    raw <- svsample(ret_seg, draws = draws, burnin = burnin)
+    reduce_and_save(raw, file_rds, max_draws = max_draws)
+  }
+}
+
+# ---- Roda ou carrega os 9 modelos SV ----
+sv_models <- vector("list", 3)
+for (k in 1:3) {
+  ev      <- events[[k]]
+  sv_models[[k]] <- lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx) || length(idx) < 50) return(NULL)
+    r        <- as.numeric(na.omit(rets_full[idx]))
+    file_rds <- paste0("sv_ibm_e", k, "_", nm, ".rds")
+    run_or_load_sv(r, file_rds)
+  })
+  names(sv_models[[k]]) <- c("pre", "during", "post")
+}
+if (!file.exists("compressed_ibm_v2.txt")) file.create("compressed_ibm_v2.txt")
+
+
+for (k in 1:3) {
+  ev <- events[[k]]
+  for (nm in c("pre", "during", "post")) {
+    mdl <- sv_models[[k]][[nm]]
+    if (is.null(mdl)) next
+    plot(mdl, showobs = FALSE)
+    title(main = paste0(ev$event_label, " - SV [", nm, "] | ",
+                        format(ev$crash_date, "%Y-%m-%d")))
+  }
+}
+
+
+for (ev in events) {
+  vol_list <- lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx)) return(NULL)
+    r_seg    <- rets_full[idx]
+    vol_acum <- sqrt(cumsum(r_seg^2))
+    data.frame(index = seq_along(idx), vol = vol_acum, janela = nm)
+  })
+  df_vol <- bind_rows(Filter(Negate(is.null), vol_list)) %>%
+    mutate(janela = factor(janela, levels = c("pre", "during", "post")))
+  
+  print(
+    ggplot(df_vol, aes(x = index, y = vol, color = janela)) +
+      geom_line() +
+      scale_color_manual(values = c(pre = "#2ECC71", during = "#E74C3C", post = "#3498DB")) +
+      labs(title   = paste0(ev$event_label, " - Vol. Realizada Acumulada"),
+           subtitle = paste0("Crash: ", format(ev$crash_date, "%Y-%m-%d"),
+                             " | Ret: ", round(ev$crash_ret * 100, 3), "%"),
+           x = "Indice relativo", y = "sqrt(cumsum(r^2))", color = "Janela") +
+      theme_minimal()
+  )
+}
+
+
+minutos_ano <- 252 * 390   # NYSE: ~390 min/dia x 252 dias uteis
+
+calc_RV <- function(r) sum(r^2, na.rm = TRUE)
+
+calc_BV <- function(r) {
+  if (length(r) < 2) return(NA_real_)
+  (pi / 2)^(-1) * sum(abs(r[-1]) * abs(r[-length(r)]), na.rm = TRUE)
+}
+
+annualize_vol_from_rv <- function(rv, n_obs) {
+  if (n_obs <= 0) return(NA_real_)
+  sqrt(rv / n_obs) * sqrt(minutos_ano)
+}
+
+bootstrap_RV <- function(r, R = 1500) {
+  r <- na.omit(as.numeric(r))
+  if (length(r) < 5) return(NULL)
+  b  <- boot::boot(data = r, statistic = function(d, i) sum(d[i]^2), R = R)
+  ci <- boot::boot.ci(b, type = c("perc", "bca"))
+  list(boot = b, ci = ci)
+}
+
+perm_test_RV_diff <- function(r1, r2, R = 2000) {
+  r1 <- na.omit(as.numeric(r1)); r2 <- na.omit(as.numeric(r2))
+  obs_diff <- calc_RV(r2) - calc_RV(r1)
+  pooled   <- c(r1, r2); n1 <- length(r1); n2 <- length(r2)
+  set.seed(123)
+  perm_diffs <- replicate(R, {
+    p <- sample(pooled)
+    calc_RV(p[(n1+1):(n1+n2)]) - calc_RV(p[1:n1])
+  })
+  list(obs_diff = obs_diff, p_value = mean(abs(perm_diffs) >= abs(obs_diff)))
+}
+
+calc_for_segment <- function(name, idx, ret_vec) {
+  r  <- as.numeric(na.omit(ret_vec[idx]))
+  rv <- calc_RV(r); bv <- calc_BV(r)
+  jmp <- max(rv - bv, 0)
+  list(name      = name, n = length(r),
+       RV = rv, BV = bv, Jump = jmp,
+       JumpShare = ifelse(rv > 0, jmp / rv, NA_real_),
+       VolAnn    = annualize_vol_from_rv(rv, length(r)),
+       mean      = mean(r), sd = sd(r),
+       skewness  = moments::skewness(r), kurtosis = moments::kurtosis(r),
+       boot      = bootstrap_RV(r, R = 1500))
+}
+
+all_rv_results <- vector("list", 3)
+
+for (k in 1:3) {
+  ev      <- events[[k]]
+  janelas <- list(pre = ev$pre, during = ev$during, post = ev$post)
+  results <- lapply(names(janelas), function(nm) {
+    if (is.null(janelas[[nm]])) return(NULL)
+    calc_for_segment(nm, janelas[[nm]], rets_full)
+  })
+  names(results) <- names(janelas)
+  results <- Filter(Negate(is.null), results)
+  all_rv_results[[k]] <- results
+  
+  cat("\n\n===", ev$event_label, "| Crash:", format(ev$crash_date, "%Y-%m-%d"), "===\n")
+  
+  summary_tbl <- do.call(rbind, lapply(results, function(x) {
+    data.frame(janela = x$name, n = x$n, RV = x$RV, BV = x$BV,
+               Jump = x$Jump, JumpShare = x$JumpShare, VolAnn = x$VolAnn,
+               mean = x$mean, sd = x$sd,
+               skewness = x$skewness, kurtosis = x$kurtosis)
+  }))
+  print(knitr::kable(summary_tbl, digits = 6,
+                     caption = paste0(ev$event_label, " - RV, Bipower, Jump, Vol Anualizada")))
+  
+  # Diferencas de RV
+  pairs <- list(c("pre","during"), c("pre","post"))
+  for (pr in pairs) {
+    a <- pr[1]; b <- pr[2]
+    if (!is.null(results[[a]]) && !is.null(results[[b]])) {
+      diff_rv  <- results[[b]]$RV - results[[a]]$RV
+      pct_rv   <- diff_rv / abs(results[[a]]$RV) * 100
+      cat(sprintf("  RV (%s - %s): %+.6f  (%+.2f%%)\n", b, a, diff_rv, pct_rv))
+    }
+  }
+  
+  # Testes permutacionais
+  for (pr in pairs) {
+    a <- pr[1]; b <- pr[2]
+    if (!is.null(janelas[[a]]) && !is.null(janelas[[b]])) {
+      perm_res <- perm_test_RV_diff(rets_full[janelas[[a]]], rets_full[janelas[[b]]], R = 2000)
+      cat(sprintf("  Perm test (%s vs %s): p = %.4f\n", b, a, perm_res$p_value))
+    }
+  }
+  
+  # Levene
+  seg_rets <- unlist(lapply(names(janelas), function(nm) {
+    if (!is.null(janelas[[nm]])) as.numeric(rets_full[janelas[[nm]]]) else NULL
+  }))
+  seg_labs <- unlist(lapply(names(janelas), function(nm) {
+    if (!is.null(janelas[[nm]])) rep(nm, length(janelas[[nm]])) else NULL
+  }))
+  combined <- data.frame(ret = seg_rets,
+                         seg = factor(seg_labs, levels = c("pre","during","post")))
+  lev <- car::leveneTest(ret ~ seg, data = combined)
+  cat(sprintf("  Levene: F = %.4f | p = %.6f\n", lev[1,"F value"], lev[1,"Pr(>F)"]))
+  
+  # KS
+  for (pr in pairs) {
+    a <- pr[1]; b <- pr[2]
+    if (!is.null(janelas[[a]]) && !is.null(janelas[[b]])) {
+      ks <- ks.test(as.numeric(rets_full[janelas[[a]]]),
+                    as.numeric(rets_full[janelas[[b]]]))
+      cat(sprintf("  KS (%s vs %s): D = %.4f | p = %.6f\n", b, a, ks$statistic, ks$p.value))
+    }
+  }
+}
+
+
+# ============================================================
+# OBJETIVO DESTE CHUNK
+# Usando as distribuicoes posteriores de mu, phi e sigma dos
+# 9 modelos SV (3 eventos x 3 fases), responder:
+#
+#  1. NIVEL        : mu  — qual segmento tem vol media mais alta?
+#  2. PREVISIBILIDADE: phi — em qual segmento choques duram mais?
+#  3. ERRATICIDADE : sigma — em qual a vol varia mais minutoa-a-minuto?
+#  4. MEIA-VIDA    : log(0.5)/log(phi) — minutos para um choque de vol
+#                   decair pela metade (previsibilidade em escala de tempo)
+#  5. VAR INCONDICIONAL: sigma^2/(1-phi^2) — dispersao estacionaria
+#                   da log-vol. Alta = vol pode atingir extremos distantes
+#                   da media, mesmo que lentamente.
+#  6. INDICE DE PREVISIBILIDADE: phi/(1+sigma) — combina persistencia
+#                   e ruido numa unica metrica comparavel entre segmentos.
+#                   Alto = regime elevado MAS consistente (predizivel).
+#                   Baixo = regime errático, dificil de modelar.
+#  7. CV LATENTE   : coef. de variacao de exp(h_t) dentro do segmento —
+#                   quanta variabilidade interna existe na serie de
+#                   volatilidades latentes estimadas.
+#  8. COMPARACOES PAIRWISE: P(sigma_A > sigma_B) para todos os 9 pares
+#                   possiveis — testa diretamente se um segmento e
+#                   significativamente mais errático que outro.
+# ============================================================
+
+minutos_ano <- 252 * 390
+
+# ---- Helpers locais ----
+.get_para   <- function(sv) as.matrix(para(sv,   chain = "concatenated"))
+.get_latent <- function(sv) as.matrix(latent(sv, chain = "concatenated"))
+.srows      <- function(mat, n) {
+  if (nrow(mat) <= n) return(mat)
+  set.seed(42); mat[sample(nrow(mat), n), , drop = FALSE]
+}
+
+# ---- Extrai draws de todos os 9 segmentos ----
+seg_ids    <- expand.grid(k = 1:3, nm = c("pre","during","post"),
+                          stringsAsFactors = FALSE)
+seg_ids    <- seg_ids[order(seg_ids$k), ]   # ordem cronologica
+
+all_para   <- vector("list", nrow(seg_ids))
+all_latent <- vector("list", nrow(seg_ids))
+seg_labels <- character(nrow(seg_ids))
+
+for (i in seq_len(nrow(seg_ids))) {
+  k  <- seg_ids$k[i]
+  nm <- seg_ids$nm[i]
+  mdl <- sv_models[[k]][[nm]]
+  seg_labels[i] <- paste0("E", k, "_", nm)
+  if (is.null(mdl)) next
+  all_para[[i]]   <- .get_para(mdl)
+  all_latent[[i]] <- .get_latent(mdl)
+}
+
+# Numero comum de draws (minimo entre segmentos validos)
+valid_idx  <- which(!sapply(all_para, is.null))
+common_n   <- min(sapply(all_para[valid_idx], nrow))
+set.seed(42)
+all_para   <- lapply(all_para,   function(m) if (!is.null(m)) .srows(m, common_n) else NULL)
+all_latent <- lapply(all_latent, function(m) if (!is.null(m)) .srows(m, common_n) else NULL)
+names(all_para)   <- seg_labels
+names(all_latent) <- seg_labels
+
+cat(sprintf("Segmentos validos: %d / 9 | Draws por segmento: %d\n",
+            length(valid_idx), common_n))
+
+# ============================================================
+# 1. TABELA MESTRA: estatisticas posteriores de mu, phi, sigma
+#    + metricas derivadas por segmento
+# ============================================================
+master_rows <- lapply(seq_along(seg_labels), function(i) {
+  pm <- all_para[[i]]
+  lm <- all_latent[[i]]
+  lb <- seg_labels[i]
+  if (is.null(pm)) return(NULL)
+  
+  mu_v    <- pm[, "mu"]
+  phi_v   <- pm[, "phi"]
+  sig_v   <- pm[, "sigma"]
+  
+  # Meia-vida (em minutos): tempo para choque de vol cair 50%
+  half_life_v <- log(0.5) / log(phi_v)
+  
+  # Variancia incondicional da log-vol: sigma^2 / (1 - phi^2)
+  var_incond_v <- sig_v^2 / (1 - phi_v^2)
+  
+  # Indice de previsibilidade: phi / (1 + sigma)
+  pred_idx_v <- phi_v / (1 + sig_v)
+  
+  # CV latente: sd(exp(h_t)) / mean(exp(h_t)) por draw, depois media
+  # exp(h_t) = variancia latente instantanea
+  cv_lat_per_draw <- apply(exp(lm), 1, function(row) sd(row) / mean(row))
+  
+  data.frame(
+    segmento       = lb,
+    evento         = paste0("Evento_", seg_ids$k[i]),
+    janela         = seg_ids$nm[i],
+    # mu
+    mu_mean        = mean(mu_v),
+    mu_sd          = sd(mu_v),
+    mu_q025        = quantile(mu_v, .025),
+    mu_q975        = quantile(mu_v, .975),
+    # phi
+    phi_mean       = mean(phi_v),
+    phi_sd         = sd(phi_v),
+    phi_q025       = quantile(phi_v, .025),
+    phi_q975       = quantile(phi_v, .975),
+    # sigma
+    sig_mean       = mean(sig_v),
+    sig_sd         = sd(sig_v),
+    sig_q025       = quantile(sig_v, .025),
+    sig_q975       = quantile(sig_v, .975),
+    # derivados
+    half_life_mean = mean(half_life_v),
+    half_life_q025 = quantile(half_life_v, .025),
+    half_life_q975 = quantile(half_life_v, .975),
+    var_incond     = mean(var_incond_v),
+    pred_idx       = mean(pred_idx_v),
+    cv_latente     = mean(cv_lat_per_draw, na.rm = TRUE)
+  )
+})
+master_tbl <- bind_rows(Filter(Negate(is.null), master_rows)) %>%
+  mutate(janela = factor(janela, levels = c("pre","during","post")))
+
+# Tabela resumida para impressao
+print_tbl <- master_tbl %>%
+  select(segmento, mu_mean, phi_mean, sig_mean,
+         half_life_mean, var_incond, pred_idx, cv_latente) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+knitr::kable(print_tbl,
+             col.names = c("Segmento","mu (media)","phi (media)","sigma (media)",
+                           "Meia-vida (min)","Var Incond.","Pred. Index","CV Latente"),
+             caption = "Tabela Mestra — Parametros SV e Metricas Derivadas para os 9 Segmentos")
+
+# ============================================================
+# 2. HEATMAP: perfis comparados — 9 segmentos x parametros
+#    (valores z-scored para colocar na mesma escala visual)
+# ============================================================
+heat_df <- master_tbl %>%
+  select(segmento, janela, evento,
+         mu = mu_mean, phi = phi_mean, sigma = sig_mean,
+         half_life = half_life_mean, var_incond, pred_idx, cv_latente) %>%
+  pivot_longer(cols = c(mu, phi, sigma, half_life, var_incond, pred_idx, cv_latente),
+               names_to = "metrica", values_to = "valor") %>%
+  group_by(metrica) %>%
+  mutate(z = (valor - mean(valor, na.rm=TRUE)) / (sd(valor, na.rm=TRUE) + 1e-10)) %>%
+  ungroup() %>%
+  mutate(
+    segmento = factor(segmento, levels = seg_labels),
+    metrica  = factor(metrica,
+                      levels = c("mu","phi","sigma","half_life",
+                                 "var_incond","pred_idx","cv_latente"),
+                      labels = c("mu (nivel)",
+                                 "phi (persistencia)",
+                                 "sigma (erraticidade)",
+                                 "Meia-vida (min)",
+                                 "Var. Incondicional",
+                                 "Indice Previsibil.",
+                                 "CV Latente"))
+  )
+
+print(
+  ggplot(heat_df, aes(x = segmento, y = metrica, fill = z)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = round(valor, 3)), size = 2.8) +
+    scale_fill_gradient2(low = "#3498DB", mid = "white", high = "#E74C3C",
+                         midpoint = 0, name = "Z-score") +
+    labs(title    = "Heatmap de Perfis SV — 9 Segmentos (z-scored por metrica)",
+         subtitle = "Vermelho = acima da media | Azul = abaixo | Valor = media posterior original",
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(axis.text.x  = element_text(angle = 40, hjust = 1),
+          plot.title   = element_text(face = "bold"),
+          panel.grid   = element_blank())
+)
+
+# ============================================================
+# 3. PLANO DE PREVISIBILIDADE: phi (eixo y) vs sigma (eixo x)
+#    Quadrantes:
+#      Q1 (alto phi, baixo sigma) = vol ELEVADA e PREVISIVEL
+#      Q2 (alto phi, alto sigma)  = vol ELEVADA e ERRATICA
+#      Q3 (baixo phi, baixo sigma)= vol BAIXA e PREVISIVEL
+#      Q4 (baixo phi, alto sigma) = vol BAIXA e ERRATICA (raro)
+# ============================================================
+phi_med  <- median(master_tbl$phi_mean,  na.rm = TRUE)
+sig_med  <- median(master_tbl$sig_mean,  na.rm = TRUE)
+colors_j <- c(pre = "#2ECC71", during = "#E74C3C", post = "#3498DB")
+
+print(
+  ggplot(master_tbl, aes(x = sig_mean, y = phi_mean,
+                         color = janela, shape = evento,
+                         label = segmento)) +
+    annotate("rect", xmin = -Inf,   xmax = sig_med, ymin = phi_med, ymax = Inf,
+             fill = "#D5F5E3", alpha = 0.35) +
+    annotate("rect", xmin = sig_med, xmax = Inf,    ymin = phi_med, ymax = Inf,
+             fill = "#FADBD8", alpha = 0.35) +
+    annotate("rect", xmin = -Inf,   xmax = sig_med, ymin = -Inf,    ymax = phi_med,
+             fill = "#EBF5FB", alpha = 0.35) +
+    annotate("rect", xmin = sig_med, xmax = Inf,    ymin = -Inf,    ymax = phi_med,
+             fill = "#FEF9E7", alpha = 0.35) +
+    annotate("text", x = sig_med * 0.85, y = Inf,      label = "Alta vol\nPrevisivel",
+             vjust = 1.5, size = 3, color = "#27AE60", fontface = "bold") +
+    annotate("text", x = sig_med * 1.15, y = Inf,      label = "Alta vol\nErratica",
+             vjust = 1.5, size = 3, color = "#C0392B", fontface = "bold") +
+    annotate("text", x = sig_med * 0.85, y = -Inf,     label = "Baixa vol\nPrevisivel",
+             vjust = -0.5, size = 3, color = "#2980B9", fontface = "bold") +
+    annotate("text", x = sig_med * 1.15, y = -Inf,     label = "Baixa vol\nErratica",
+             vjust = -0.5, size = 3, color = "#D4AC0D", fontface = "bold") +
+    geom_vline(xintercept = sig_med, linetype = "dashed", color = "grey50") +
+    geom_hline(yintercept = phi_med, linetype = "dashed", color = "grey50") +
+    geom_point(size = 4.5, alpha = 0.9) +
+    geom_text(nudge_y = 0.002, size = 2.5, show.legend = FALSE) +
+    scale_color_manual(values = colors_j) +
+    scale_shape_manual(values = c(Evento_1 = 16, Evento_2 = 17, Evento_3 = 15)) +
+    labs(title    = "Plano de Previsibilidade: phi vs sigma",
+         subtitle = "phi = persistencia (previsibilidade) | sigma = erraticidade da vol",
+         x = "sigma — vol-da-vol (erraticidade)",
+         y = "phi — persistencia (previsibilidade)",
+         color = "Fase", shape = "Evento") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+)
+
+# ============================================================
+# 4. MEIA-VIDA DOS CHOQUES POR SEGMENTO
+#    Mostra quanto tempo (minutos) um choque de volatilidade
+#    demora para desaparecer. Alta meia-vida = mercado "lembra"
+#    mais do choque = regime mais previsivel mas mais perigoso.
+# ============================================================
+hl_df <- master_tbl %>%
+  mutate(segmento = factor(segmento, levels = seg_labels))
+
+print(
+  ggplot(hl_df, aes(x = segmento, y = half_life_mean, fill = janela)) +
+    geom_col(alpha = 0.85, width = 0.7) +
+    geom_errorbar(aes(ymin = half_life_q025, ymax = half_life_q975),
+                  width = 0.25, linewidth = 0.7) +
+    geom_text(aes(label = round(half_life_mean, 1)),
+              vjust = -0.6, size = 3.2) +
+    scale_fill_manual(values = colors_j) +
+    labs(title    = "Meia-vida dos Choques de Volatilidade — 9 Segmentos",
+         subtitle = "Minutos para um choque de vol decair 50% | Barras = IC 95% posterior",
+         x = NULL, y = "Meia-vida (minutos)", fill = "Fase") +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x  = element_text(angle = 35, hjust = 1),
+          plot.title   = element_text(face = "bold"))
+)
+
+# ============================================================
+# 5. mu vs MEIA-VIDA: nivel medio vs duracao dos choques
+#    Revela se periodos com vol mais alta tambem sao mais
+#    persistentes (o que seria o caso classico de crash).
+# ============================================================
+print(
+  ggplot(master_tbl, aes(x = half_life_mean, y = mu_mean,
+                         color = janela, shape = evento,
+                         label = segmento)) +
+    geom_point(size = 4.5, alpha = 0.9) +
+    geom_text(nudge_y = 0.08, size = 2.7, show.legend = FALSE) +
+    scale_color_manual(values = colors_j) +
+    scale_shape_manual(values = c(Evento_1 = 16, Evento_2 = 17, Evento_3 = 15)) +
+    labs(title    = "Nivel medio de vol (mu) vs Meia-vida dos choques",
+         subtitle = "Quadrante sup-dir = mais perigoso: vol alta E persistente",
+         x = "Meia-vida (minutos)",
+         y = "mu — nivel medio log-vol (menos negativo = mais alto)",
+         color = "Fase", shape = "Evento") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+)
+
+# ============================================================
+# 6. INDICE DE PREVISIBILIDADE vs CV LATENTE
+#    pred_idx = phi/(1+sigma): alto = previsivel
+#    cv_latente: quanta variacao interna tem a serie h(t)
+#    Esperado: during = alta vol MAS pred_idx alto (crash gera
+#    regime consistente); pre/post = mais erraticos.
+# ============================================================
+print(
+  ggplot(master_tbl, aes(x = cv_latente, y = pred_idx,
+                         color = janela, shape = evento,
+                         label = segmento)) +
+    geom_point(size = 4.5, alpha = 0.9) +
+    geom_text(nudge_y = 0.003, size = 2.7, show.legend = FALSE) +
+    scale_color_manual(values = colors_j) +
+    scale_shape_manual(values = c(Evento_1 = 16, Evento_2 = 17, Evento_3 = 15)) +
+    labs(title    = "Previsibilidade vs Variabilidade Interna da Volatilidade Latente",
+         subtitle = "Sup-esq = vol interna variavel MAS sistematica | Inf-dir = erratica",
+         x = "CV Latente — variabilidade interna de exp(h_t)",
+         y = "Indice de Previsibilidade — phi/(1+sigma)",
+         color = "Fase", shape = "Evento") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+)
+
+# ============================================================
+# 7. COMPARACOES PAIRWISE POSTERIORES: P(sigma_A > sigma_B)
+#    Matriz 9x9 de probabilidades posteriores de que o sigma
+#    do segmento na linha e maior que o da coluna.
+#    Valores > 0.90 indicam diferenca forte e confiavel.
+# ============================================================
+valid_segs   <- seg_labels[valid_idx]
+n_valid      <- length(valid_segs)
+pairwise_mat <- matrix(NA_real_, n_valid, n_valid,
+                       dimnames = list(valid_segs, valid_segs))
+
+for (i in seq_len(n_valid)) {
+  for (j in seq_len(n_valid)) {
+    si <- all_para[[valid_segs[i]]][, "sigma"]
+    sj <- all_para[[valid_segs[j]]][, "sigma"]
+    pairwise_mat[i, j] <- mean(si > sj)
+  }
+}
+
+pw_df <- as.data.frame(pairwise_mat) %>%
+  mutate(seg_row = rownames(pairwise_mat)) %>%
+  pivot_longer(-seg_row, names_to = "seg_col", values_to = "prob") %>%
+  mutate(seg_row = factor(seg_row, levels = valid_segs),
+         seg_col = factor(seg_col, levels = valid_segs),
+         label   = ifelse(seg_row == seg_col, "—", sprintf("%.2f", prob)))
+
+print(
+  ggplot(pw_df, aes(x = seg_col, y = seg_row, fill = prob)) +
+    geom_tile(color = "white", linewidth = 0.4) +
+    geom_text(aes(label = label), size = 2.8) +
+    scale_fill_gradient2(low = "#3498DB", mid = "#F0F3F4",
+                         high = "#E74C3C", midpoint = 0.5,
+                         limits = c(0, 1),
+                         name = "P(linha > col)") +
+    labs(title    = "Matriz Pairwise: P(sigma_linha > sigma_coluna)",
+         subtitle = "Vermelho ~ 1.0 = linha e significativamente mais erratica que coluna",
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 10) +
+    theme(axis.text.x  = element_text(angle = 40, hjust = 1),
+          plot.title   = element_text(face = "bold"),
+          panel.grid   = element_blank())
+)
+
+# ============================================================
+# 8. DISTRIBUICAO POSTERIOR DE SIGMA — todos os segmentos
+#    sobrepostos: permite ver separacao entre regimes de forma
+#    visual direta, complementando a matriz pairwise.
+# ============================================================
+sigma_df <- do.call(rbind, lapply(valid_segs, function(lb) {
+  data.frame(sigma = all_para[[lb]][, "sigma"],
+             segmento = lb,
+             janela   = sub("E[0-9]_", "", lb),
+             stringsAsFactors = FALSE)
+})) %>%
+  mutate(janela   = factor(janela,   levels = c("pre","during","post")),
+         segmento = factor(segmento, levels = valid_segs))
+
+print(
+  ggplot(sigma_df, aes(x = sigma, color = janela, group = segmento,
+                       linetype = segmento)) +
+    geom_density(linewidth = 0.7, alpha = 0) +
+    scale_color_manual(values = colors_j) +
+    labs(title    = "Distribuicoes Posteriores de sigma — 9 Segmentos",
+         subtitle = "Separacao entre curvas = evidencia bayesiana de regimes diferentes",
+         x = "sigma (vol-da-vol)", y = "Densidade",
+         color = "Fase", linetype = "Segmento") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+)
+
+# ============================================================
+# 9. DISTRIBUICAO POSTERIOR DE phi — todos os segmentos
+# ============================================================
+phi_df <- do.call(rbind, lapply(valid_segs, function(lb) {
+  data.frame(phi    = all_para[[lb]][, "phi"],
+             segmento = lb,
+             janela   = sub("E[0-9]_", "", lb),
+             stringsAsFactors = FALSE)
+})) %>%
+  mutate(janela   = factor(janela,   levels = c("pre","during","post")),
+         segmento = factor(segmento, levels = valid_segs))
+
+print(
+  ggplot(phi_df, aes(x = phi, color = janela, group = segmento,
+                     linetype = segmento)) +
+    geom_density(linewidth = 0.7, alpha = 0) +
+    scale_color_manual(values = colors_j) +
+    labs(title    = "Distribuicoes Posteriores de phi — 9 Segmentos",
+         subtitle = "phi proximo de 1 = choque de vol demora mais para dissipar",
+         x = "phi (persistencia)", y = "Densidade",
+         color = "Fase", linetype = "Segmento") +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+)
+
+# ============================================================
+# 10. RESUMO FINAL: ranking de previsibilidade e erraticidade
+# ============================================================
+rank_tbl <- master_tbl %>%
+  arrange(desc(pred_idx)) %>%
+  mutate(
+    rank_previs = row_number(),
+    regime_tipo = case_when(
+      phi_mean >= phi_med & sig_mean <  sig_med ~ "Alta vol / Previsivel",
+      phi_mean >= phi_med & sig_mean >= sig_med ~ "Alta vol / Erratica",
+      phi_mean <  phi_med & sig_mean <  sig_med ~ "Baixa vol / Previsivel",
+      TRUE                                       ~ "Baixa vol / Erratica"
+    )
+  ) %>%
+  select(segmento, janela, evento, mu_mean, phi_mean, sig_mean,
+         half_life_mean, pred_idx, cv_latente, regime_tipo) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+knitr::kable(rank_tbl,
+             col.names = c("Segmento","Fase","Evento","mu","phi","sigma",
+                           "Meia-vida","Pred.Index","CV Lat.","Classificacao"),
+             caption = "Ranking por Previsibilidade + Classificacao de Regime para os 9 Segmentos")
+
+
+minutos_ano   <- 252 * 390
+colors_janela <- c(pre = "#2ECC71", during = "#E74C3C", post = "#3498DB")
+
+# Funcoes de extracao (redefinidas localmente para garantir disponibilidade)
+.get_para_mat   <- function(sv) as.matrix(para(sv,   chain = "concatenated"))
+.get_latent_mat <- function(sv) as.matrix(latent(sv, chain = "concatenated"))
+.sample_rows    <- function(mat, n) {
+  if (nrow(mat) <= n) return(mat)
+  mat[sample(seq_len(nrow(mat)), n), , drop = FALSE]
+}
+.per_draw_ann_vol <- function(latmat)
+  sqrt(rowMeans(exp(latmat), na.rm = TRUE)) * sqrt(minutos_ano)
+
+ann_draws_all <- vector("list", length(sv_models))
+# ---- Diagnostico: verifica ann_draws_all ----
+cat("=== Diagnostico ann_draws_all ===\n")
+n_populated <- sum(!sapply(ann_draws_all, is.null))
+cat(sprintf("Entradas populadas: %d / %d\n", n_populated, length(ann_draws_all)))
+
+# ---- Reconstrucao a partir de sv_models (caso ann_draws_all esteja vazio) ----
+# Isso acontece quando o chunk 'bayesian-comparison' nao rodou nesta sessao
+# ou quando todos os modelos eram NULL na hora de popular a lista.
+if (n_populated == 0) {
+  cat("ann_draws_all vazio — reconstruindo a partir de sv_models...\n")
+  
+  # sv_models deve existir no ambiente (chunk sv-models)
+  if (!exists("sv_models")) stop("sv_models nao encontrado. Rode o chunk 'sv-models' primeiro.")
+  
+  ann_draws_all <- vector("list", length(sv_models))
+  
+  for (k in seq_along(sv_models)) {
+    ev  <- events[[k]]
+    mdl <- sv_models[[k]]
+    
+    valid_nms <- names(Filter(Negate(is.null), mdl))
+    cat(sprintf("  Evento %d (%s): modelos validos = [%s]\n",
+                k, ev$event_label, paste(valid_nms, collapse = ", ")))
+    
+    if (length(valid_nms) < 1) next
+    
+    # Extrai latentes e calcula vol anualizada por draw
+    latent_list <- lapply(mdl[valid_nms], .get_latent_mat)
+    common_n    <- min(sapply(latent_list, nrow))
+    set.seed(1)
+    latent_s    <- lapply(latent_list, .sample_rows, n = common_n)
+    ann_list    <- lapply(latent_s, .per_draw_ann_vol)
+    names(ann_list) <- valid_nms
+    
+    ann_draws_all[[k]] <- list(
+      event_label = ev$event_label,
+      crash_date  = ev$crash_date,
+      ann_list    = ann_list,
+      valid_nms   = valid_nms,
+      common_n    = common_n
+    )
+    cat(sprintf("    -> populado com %d draws\n", common_n))
+  }
+  
+  n_populated <- sum(!sapply(ann_draws_all, is.null))
+  cat(sprintf("Apos reconstrucao: %d / %d entradas validas\n", n_populated, length(ann_draws_all)))
+}
+
+if (n_populated == 0) {
+  stop(paste(
+    "Nenhum modelo SV disponivel para gerar os plots.",
+    "Possiveis causas:",
+    "  1) Os arquivos .rds ainda nao existem (primeira execucao — aguarde o MCMC terminar)",
+    "  2) Os janelamentos pre/during/post resultaram em segmentos com < 50 obs (dataset curto)",
+    "  3) O chunk 'sv-models' encontrou erros silenciosos — reveja o output desse chunk",
+    sep = "\n"
+  ))
+}
+
+# ---- Plots por evento ----
+for (k in seq_along(ann_draws_all)) {
+  adk <- ann_draws_all[[k]]
+  if (is.null(adk)) {
+    cat(sprintf("\nEvento %d: sem dados, pulando.\n", k))
+    next
+  }
+  
+  ev_label <- adk$event_label
+  ev_date  <- format(adk$crash_date, "%Y-%m-%d")
+  
+  cat(sprintf("\nGerando plots: %s | crash %s | regimes: [%s] | draws: %d\n",
+              ev_label, ev_date,
+              paste(adk$valid_nms, collapse = ", "),
+              adk$common_n))
+  
+  df_long <- do.call(rbind, Map(function(v, nm) {
+    data.frame(ann_vol = as.numeric(v), regime = nm, stringsAsFactors = FALSE)
+  }, adk$ann_list, adk$valid_nms)) %>%
+    mutate(regime = factor(regime, levels = c("pre","during","post")))
+  
+  # --- Densidade ---
+  print(
+    ggplot(df_long, aes(x = ann_vol, fill = regime)) +
+      geom_density(alpha = 0.45) +
+      scale_fill_manual(values = colors_janela, drop = FALSE) +
+      labs(title    = paste0(ev_label, " - Densidades Posteriores Vol. Anualizada"),
+           subtitle = paste0("Crash: ", ev_date),
+           x = "Volatilidade anualizada (aprox.)", y = "Densidade") +
+      theme_minimal()
+  )
+  
+  # --- Violin + Boxplot ---
+  ann_stats <- df_long %>%
+    group_by(regime) %>%
+    summarise(mean   = mean(ann_vol),
+              median = median(ann_vol),
+              sd     = sd(ann_vol),
+              q025   = quantile(ann_vol, .025),
+              q975   = quantile(ann_vol, .975),
+              .groups = "drop") %>%
+    mutate(
+      label = sprintf("mean=%.3f\n95%%CI=[%.3f,%.3f]", mean, q025, q975),
+      y_pos = q975 + 0.03 * max(q975, na.rm = TRUE)
+    )
+  
+  print(
+    ggplot(df_long, aes(x = regime, y = ann_vol, fill = regime)) +
+      geom_violin(width = 0.9, trim = FALSE, alpha = 0.35, color = NA) +
+      geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.9, color = "black") +
+      stat_summary(fun = median, geom = "point", shape = 23, size = 3,  fill = "white") +
+      stat_summary(fun = mean,   geom = "point", shape = 21, size = 2.5, fill = "red") +
+      geom_errorbar(data = ann_stats,
+                    aes(x = regime, ymin = q025, ymax = q975),
+                    width = 0.05, linewidth = 0.6, inherit.aes = FALSE) +
+      geom_text(data = ann_stats,
+                aes(x = regime, y = y_pos, label = label),
+                size = 3.5, vjust = 0, inherit.aes = FALSE) +
+      scale_fill_manual(values = colors_janela, drop = FALSE) +
+      labs(title    = paste0(ev_label, " - Distribuicoes Posteriores da Vol. Anualizada"),
+           subtitle = paste0("Crash: ", ev_date,
+                             " | Violin = densidade | Box = IQR | mediana/media"),
+           x = "Janela", y = "Volatilidade anualizada (aprox.)") +
+      theme_minimal(base_size = 13) +
+      theme(legend.position = "none",
+            plot.title = element_text(face = "bold")) +
+      coord_cartesian(clip = "off")
+  )
+}

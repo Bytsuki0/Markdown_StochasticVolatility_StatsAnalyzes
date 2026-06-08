@@ -1,0 +1,953 @@
+<<<<<<< HEAD
+---ak
+=======
+---
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+title: "On going IBM"
+format: html
+editor: visual
+---
+
+```{r load-packages, include=FALSE}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(zoo)
+library(xts)
+library(forecast)
+library(lubridate)
+library(PerformanceAnalytics)
+library(quantmod)
+library(tseries)
+library(FinTS)
+library(stochvol)
+library(cowplot)
+library(wavelets)
+library(gridExtra)
+library(broom)
+<<<<<<< HEAD
+=======
+library(rugarch)
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+library(moments)
+library(coda)
+library(car)
+library(boot)
+library(knitr)
+library(strucchange)
+library(changepoint)
+library(urca)
+```
+
+## Leitura e Pre-processamento dos Dados (IBM_data.csv)
+
+```{r data-load}
+dt.intra <- read.csv(
+  "IBM_data.csv",
+  header           = TRUE,
+  stringsAsFactors = FALSE,
+  sep              = ",",
+  dec              = "."
+)
+
+dt.intra$Period <- mdy_hm(paste(dt.intra$Date, dt.intra$Time))
+
+dt1 <- as_tibble(dt.intra) %>%
+  arrange(Period) %>%
+  filter(!(hour(Period) == 9 & minute(Period) < 40)) %>%
+  filter(hour(Period) < 16) %>%
+  filter(!(hour(Period) == 15 & minute(Period) >= 56)) %>%
+  group_by(date(Period)) %>%
+  filter(n() > 100) %>%
+  ungroup() %>%
+  arrange(Period) %>%
+  mutate(
+    Ret.1min   = (Close - lag(Close)) / lag(Close),
+    Close.1min = Close
+  ) %>%
+  filter(!is.na(Ret.1min))
+
+ret_sd       <- sd(dt1$Ret.1min, na.rm = TRUE)
+ret_mean     <- mean(dt1$Ret.1min, na.rm = TRUE)
+outlier_mask <- abs(dt1$Ret.1min - ret_mean) > 10 * ret_sd
+dt1$Ret.1min[outlier_mask] <- NA
+dt1$Ret.1min <- zoo::na.locf(dt1$Ret.1min, na.rm = FALSE)
+
+ret.1min <- as.xts(dt1$Ret.1min, order.by = dt1$Period)
+
+cat("Total de observacoes apos limpeza:", nrow(dt1), "\n")
+cat("Periodo:", format(min(dt1$Period)), "a", format(max(dt1$Period)), "\n")
+```
+
+## Observacao Inicial
+
+```{r initial-plot}
+plot(dt1$Close.1min,
+     main = "IBM - Precos de Fechamento (1 min) - Serie Completa",
+     col  = "black", type = "l",
+     xlab = "Indice", ylab = "Preco")
+
+boxplot(as.double(ret.1min),
+        main = "Boxplot dos Retornos 1min - IBM (Serie Completa)",
+        ylab = "Retorno")
+```
+
+## Preparacao da Serie Diaria de Retornos
+
+```{r daily-returns-prep}
+<<<<<<< HEAD
+
+=======
+# ============================================================
+# Serie diaria de retornos: base comum para Bai-Perron e
+# Zivot-Andrews. Retornos garantem estacionariedade.
+# Janelas continuas para todos os eventos:
+#   pre    = [X - 10000, X      ]
+#   during = [X        , X+10000]
+#   post   = [X + 10000, X+20000]
+# ============================================================
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+PRE_START_OFFSET  <- -10000
+PRE_END_OFFSET    <-      0
+DUR_START_OFFSET  <-      0
+DUR_END_OFFSET    <-  10000
+POST_START_OFFSET <-  10000
+POST_END_OFFSET   <-  20000
+MIN_FUTURE_IDX    <-  20000   # minimo de obs apos X para manter o ponto
+
+n_total   <- nrow(dt1)
+rets_full <- dt1$Ret.1min
+
+<<<<<<< HEAD
+
+=======
+# ---- serie de fechamentos diarios ----
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+daily_close <- dt1 %>%
+  mutate(trade_date = as.Date(Period)) %>%
+  group_by(trade_date) %>%
+  summarise(close_last = last(Close.1min), .groups = "drop") %>%
+  arrange(trade_date) %>%
+  mutate(
+    close_prev = lag(close_last),
+    close_diff = close_last - close_prev,
+    close_pct  = abs(close_diff / close_prev)
+  )
+
+dt1_indexed <- dt1 %>%
+  mutate(global_idx = row_number(), trade_date = as.Date(Period))
+
+last_idx_per_day <- dt1_indexed %>%
+  group_by(trade_date) %>%
+  summarise(last_global_idx = max(global_idx), .groups = "drop")
+
+daily_close <- daily_close %>%
+  left_join(last_idx_per_day, by = "trade_date")
+
+dc_clean <- daily_close %>%
+  filter(!is.na(close_diff), !is.na(last_global_idx)) %>%
+  mutate(
+    close_prev2 = close_last - close_diff,
+    daily_ret   = ifelse(close_prev2 > 0, close_diff / close_prev2, NA_real_)
+  ) %>%
+  filter(!is.na(daily_ret))
+
+ret_daily <- dc_clean$daily_ret
+n_daily   <- length(ret_daily)
+log_price <- log(dc_clean$close_last)
+
+cat(sprintf("Serie diaria: %d obs  |  %s  a  %s\n",
+            n_daily,
+            format(min(dc_clean$trade_date)),
+            format(max(dc_clean$trade_date))))
+
+# ---- funcao auxiliar: linha diaria -> indice global intradiario ----
+map_to_global <- function(row_idx_vec) {
+  g_vec      <- dc_clean$last_global_idx[row_idx_vec]
+  has_future <- !is.na(g_vec) & ((n_total - g_vec) >= MIN_FUTURE_IDX)
+  sort(as.integer(g_vec[has_future]))
+}
+
+# ---- janela segura ----
+safe_window <- function(start, end, n_max) {
+  s <- max(1L, as.integer(start))
+  e <- min(n_max, as.integer(end))
+  if (s > e) return(NULL)
+  s:e
+}
+```
+
+## Bai-Perron: Quebras na Media dos Retornos Diarios
+
+> **Bai-Perron (1998, 2003) — Multiplas Quebras na Media**
+>
+> Generaliza o Teste de Chow para **m quebras simultaneas desconhecidas**. O modelo linear com $m$ quebras e: $$y_t = \mathbf{x}_t' \boldsymbol{\beta}_j + \varepsilon_t, \quad t = T_{j-1}+1, \ldots, T_j, \quad j = 1,\ldots,m+1$$ onde os pontos $T_1 < T_2 < \cdots < T_m$ sao **estimados conjuntamente** por: $$\{\hat{T}_1, \ldots, \hat{T}_m\} = \arg\min_{T_1,\ldots,T_m} \sum_{j=1}^{m+1} \sum_{t=T_{j-1}+1}^{T_j} (y_t - \bar{y}_j)^2$$
+>
+> O numero otimo de quebras $m^*$ e selecionado pelo criterio BIC ou pelo teste sequencial de Bai-Perron, que controla a probabilidade de detectar quebras espurias. A busca e feita por programacao dinamica em $O(n^2)$.
+>
+<<<<<<< HEAD
+> **Entrada:** $\log(r_t^2)$ (log do quadrado dos retornos diarios), que aproxima a serie a uma distribuicao normal e e estacionario, tornando o procedimento valido. A transformacao $\log(r_t^2) = \log(\sigma_t^2) + \log(z_t^2)$ lineariza a volatilidade, com o segundo termo atuando como ruido quasi-gaussiano de media conhecida.
+>
+> **O que detecta:** mudancas persistentes e significativas no **nivel medio de log-volatilidade** ao longo de multiplos periodos sem datas pre-fixadas. Tres execucoes com $h \in \{0.05,\, 0.10,\, 0.01\}$ permitem comparar a sensibilidade do detector ao tamanho minimo do segmento.
+
+```{r bai-perron}
+# Transformacao: log(r_t^2) aproxima a distribuicao a normal
+# e lineariza a estrutura de volatilidade.
+log_ret2 <- log(ret_daily^2 + 1e-10)   # pequeno offset para evitar log(0)
+
+# ---- Tres execucoes com diferentes h ----
+run_bp <- function(series, h_val, max_breaks = 4) {
+  fit     <- strucchange::breakpoints(series ~ 1, breaks = max_breaks, h = h_val)
+  bp_idx  <- fit$breakpoints
+  bp_idx  <- bp_idx[!is.na(bp_idx)]
+  list(fit = fit, bp_idx = bp_idx, h = h_val)
+}
+
+bp_h05 <- run_bp(log_ret2, h_val = 0.05)
+bp_h10 <- run_bp(log_ret2, h_val = 0.10)
+bp_h01 <- run_bp(log_ret2, h_val = 0.01)
+
+# ---- Mapeamento para indices globais intradiarios ----
+# Usa h = 0.05 como referencia principal para analises subsequentes
+crash_idx_bp    <- map_to_global(bp_h05$bp_idx)
+crash_idx_bp_h10 <- map_to_global(bp_h10$bp_idx)
+crash_idx_bp_h01 <- map_to_global(bp_h01$bp_idx)
+
+# ---- Tabelas-resumo para cada h ----
+make_bp_summary <- function(bp_obj, label) {
+  idx <- bp_obj$bp_idx
+  if (length(idx) == 0) return(data.frame())
+  data.frame(
+    h          = label,
+    rank       = seq_along(idx),
+    trade_date = as.character(dc_clean$trade_date[idx]),
+    log_r2     = round(log_ret2[idx], 4),
+    global_idx = dc_clean$last_global_idx[idx]
+  )
+}
+
+bp_all_summary <- bind_rows(
+  make_bp_summary(bp_h05, "h = 0.05"),
+  make_bp_summary(bp_h10, "h = 0.10"),
+  make_bp_summary(bp_h01, "h = 0.01")
+)
+
+cat("Bai-Perron — quebras na media de log(r_t^2)\n")
+knitr::kable(bp_all_summary,
+             col.names = c("h","Rank","Data","log(r_t^2)","Idx global"),
+             caption   = "Bai-Perron: quebras estruturais em log(r_t^2) — tres valores de h")
+
+# --- Grafico: log(r_t^2) com os tres conjuntos de breakpoints ---
+bp_plot_df <- bind_rows(
+  if (length(bp_h05$bp_idx) > 0)
+    data.frame(x = bp_h05$bp_idx,
+               label = paste0("h05_", seq_along(bp_h05$bp_idx)),
+               h = "h = 0.05"),
+  if (length(bp_h10$bp_idx) > 0)
+    data.frame(x = bp_h10$bp_idx,
+               label = paste0("h10_", seq_along(bp_h10$bp_idx)),
+               h = "h = 0.10"),
+  if (length(bp_h01$bp_idx) > 0)
+    data.frame(x = bp_h01$bp_idx,
+               label = paste0("h01_", seq_along(bp_h01$bp_idx)),
+               h = "h = 0.01")
+)
+
+color_h <- c("h = 0.05" = "#2980B9", "h = 0.10" = "#E67E22", "h = 0.01" = "#27AE60")
+lty_h   <- c("h = 0.05" = "solid",   "h = 0.10" = "dashed",  "h = 0.01" = "dotted")
+
+ggplot(data.frame(t = seq_len(n_daily), y = log_ret2),
+       aes(x = t, y = y)) +
+  geom_line(color = "grey40", linewidth = 0.3) +
+  geom_vline(data = bp_plot_df,
+             aes(xintercept = x, color = h, linetype = h),
+             linewidth = 0.8) +
+  geom_label(data = bp_plot_df,
+             aes(x = x, y = max(log_ret2, na.rm = TRUE) * 0.92,
+                 label = label, color = h),
+             size = 2.5, show.legend = FALSE) +
+  scale_color_manual(values = color_h) +
+  scale_linetype_manual(values = lty_h) +
+  labs(title    = "Bai-Perron: Quebras Estruturais na Media de log(r_t^2)",
+       subtitle = "Tres execucoes com diferentes tamanhos minimos de segmento (h)",
+       x = "Dia (indice)", y = "log(r_t^2)",
+       color = "h", linetype = "h") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title    = element_text(face = "bold"),
+        legend.position = "bottom")
+```
+
+## Teste ARCH-LM: Clustering de Volatilidade nos Breakpoints
+
+> **Teste ARCH-LM (Engle, 1982) — Clustering de Volatilidade**
+>
+> O Multiplicador de Lagrange de Engle testa se os quadrados dos residuos $\hat{\varepsilon}_t^2$ possuem autocorrelacao, indicando heterocedasticidade condicional (variancia nao constante ao longo do tempo).
+>
+> O modelo ARCH($q$) postula: $$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i\,\varepsilon_{t-i}^2$$
+=======
+> **Entrada:** $|r_t|$ (valor absoluto dos retornos diarios), que e proporcional a volatilidade e estacionario, tornando o procedimento valido.
+>
+> **O que detecta:** mudancas persistentes e significativas no **nivel medio de volatilidade** ao longo de multiplos periodos sem datas pre-fixadas.
+
+```{r bai-perron}
+# Aplicado a |ret_daily| para capturar mudancas de nivel de volatilidade.
+# h = 0.05 -> segmento minimo de 5% da amostra (~350 dias).
+bp_fit     <- strucchange::breakpoints(abs(ret_daily) ~ 1, breaks = 4, h = 0.05)
+bp_row_idx <- bp_fit$breakpoints
+bp_row_idx <- bp_row_idx[!is.na(bp_row_idx)]
+
+crash_idx_bp <- map_to_global(bp_row_idx)
+
+bp_summary <- data.frame(
+  rank       = seq_along(bp_row_idx),
+  trade_date = as.character(dc_clean$trade_date[bp_row_idx]),
+  daily_ret  = round(ret_daily[bp_row_idx] * 100, 4),
+  global_idx = dc_clean$last_global_idx[bp_row_idx],
+  retained   = dc_clean$last_global_idx[bp_row_idx] %in% crash_idx_bp
+)
+
+cat("Bai-Perron — quebras na media de |retornos diarios|\n")
+knitr::kable(bp_summary,
+             col.names = c("Rank","Data","Ret diario (%)","Idx global","Dados futuros ok"),
+             caption   = "Bai-Perron: quebras estruturais na media (|retornos diarios|)")
+cat("crash_idx_bp:", crash_idx_bp, "\n")
+
+# --- Grafico Bai-Perron sobre serie de |retornos| ---
+bp_dates_df <- data.frame(
+  x     = bp_row_idx,
+  label = paste0("BP", seq_along(bp_row_idx))
+)
+
+ggplot(data.frame(t = seq_len(n_daily), y = abs(ret_daily)),
+       aes(x = t, y = y)) +
+  geom_line(color = "grey40", linewidth = 0.3) +
+  geom_vline(data = bp_dates_df,
+             aes(xintercept = x), color = "#2980B9",
+             linetype = "solid", linewidth = 0.8) +
+  geom_label(data = bp_dates_df,
+             aes(x = x, y = max(abs(ret_daily), na.rm = TRUE) * 0.9,
+                 label = label),
+             color = "#2980B9", size = 3) +
+  labs(title    = "Bai-Perron: Quebras Estruturais na Media de |Retornos Diarios|",
+       subtitle = "Linhas azuis = breakpoints estimados",
+       x = "Dia (indice)", y = "|Retorno diario|") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+## Zivot-Andrews Iterativo: 3 Breakpoints Sequenciais
+
+> **Teste de Zivot-Andrews (1992) — Raiz Unitaria com Quebra Endogena**
+>
+> Extende o teste ADF permitindo uma **quebra estrutural endogena** na tendencia ou no intercepto. O modelo mais geral ("both") estima: $$\Delta y_t = c + \beta t + \gamma y_{t-1} + \delta_1 DU_t(\lambda) + \delta_2 DT_t(\lambda) + \sum_{j=1}^{k} d_j \Delta y_{t-j} + \varepsilon_t$$ onde:
+>
+> -   $y_t$ — valor da serie (log-preco) no tempo $t$
+> -   $\beta t$ — tendencia temporal linear
+> -   $DU_t(\lambda) = \mathbf{1}[t > T\lambda]$ — dummy de quebra no intercepto
+> -   $DT_t(\lambda) = t \cdot \mathbf{1}[t > T\lambda]$ — dummy de quebra na tendencia
+> -   $\lambda \in (0,1)$ — fracao do periodo onde ocorre a quebra
+> -   $\gamma$ — coeficiente de persistencia (raiz unitaria se $\gamma = 0$)
+>
+> O ponto de quebra $\hat{\tau}$ e aquele que **minimiza a estatistica** $t$ do coeficiente $\gamma$, ou seja, onde a evidencia contra a raiz unitaria e maxima: $$\hat{\tau} = \arg\min_{\tau} t_{\hat{\gamma}}(\tau)$$
+>
+> **Hipoteses:**
+>
+> -   $H_0$: $\gamma = 0$ — raiz unitaria sem quebra estrutural
+> -   $H_1$: $\gamma < 0$ — processo estacionario com quebra estrutural em $\hat{\tau}$
+>
+> **Valores criticos:** -5.57 (1%), -5.08 (5%), -4.82 (10%) para o modelo "both". Rejeita $H_0$ se $|t_{\hat{\gamma}}| > |\text{valor critico}|$.
+>
+> **Estrategia iterativa:** apos identificar o primeiro breakpoint na serie completa, o modelo e reaplicado na sub-serie **antes** desse ponto (`log_price[1:bp1]`), encontrando a quebra mais relevante no trecho anterior. O processo e repetido sobre a sub-serie antes do segundo breakpoint (`log_price[1:bp2]`), obtendo 3 breakpoints que caminham do evento mais recente em direcao ao passado — util para identificar crises historicas que precederam e possivelmente causaram o regime detectado na serie completa.
+
+```{r unit-root-za}
+# ============================================================
+# Zivot-Andrews Iterativo:
+#   Rodada 1: ZA sobre log_price completo       -> bpoint_1
+#   Rodada 2: ZA sobre log_price[(bpoint_1+1):n] -> bpoint_2 (indice local)
+#             convertido para indice global: bpoint_1 + bpoint_2
+#   Rodada 3: ZA sobre log_price[(bpoint_2g+1):n] -> bpoint_3
+# Cada rodada usa o log-preco porque ZA e projetado para series I(1).
+# ============================================================
+
+run_za <- function(series, offset = 0L, lag = 2) {
+  # offset: quantas linhas foram cortadas no inicio da serie original
+  if (length(series) < 20) return(NULL)
+  tryCatch({
+    fit    <- urca::ur.za(series, model = "both", lag = lag)
+    bp_loc <- fit@bpoint          # indice local na sub-serie
+    bp_glo <- bp_loc + offset     # indice global em dc_clean
+    list(
+      fit      = fit,
+      bp_local = bp_loc,
+      bp_global = bp_glo,
+      teststat  = fit@teststat[1],
+      cval      = fit@cval,
+      trade_date = dc_clean$trade_date[bp_glo]
+    )
+  }, error = function(e) {
+    cat("  [ZA] Erro:", conditionMessage(e), "\n"); NULL
+  })
+}
+
+# Rodada 1 — serie completa
+za1 <- run_za(log_price, offset = 0L)
+
+# Rodada 2 — sub-serie ANTES do primeiro breakpoint
+za2 <- if (!is.null(za1) && za1$bp_global > 10L) {
+  run_za(log_price[1L:za1$bp_global], offset = 0L)
+} else NULL
+
+# Rodada 3 — sub-serie ANTES do segundo breakpoint
+za3 <- if (!is.null(za2) && za2$bp_global > 10L) {
+  run_za(log_price[1L:za2$bp_global], offset = 0L)
+} else NULL
+
+# ---- Coleta os 3 resultados ----
+za_list <- Filter(Negate(is.null), list(za1, za2, za3))
+
+za_summary <- do.call(rbind, lapply(seq_along(za_list), function(i) {
+  z <- za_list[[i]]
+  data.frame(
+    rodada     = i,
+    bpoint_dia = z$bp_global,
+    trade_date = as.character(z$trade_date),
+    teststat   = round(z$teststat, 4),
+    cval_1pct  = z$cval[1],
+    cval_5pct  = z$cval[2],
+    cval_10pct = z$cval[3],
+    rejeita_H0 = ifelse(abs(z$teststat) > abs(z$cval[2]), "Sim", "Nao")
+  )
+}))
+
+cat("=== Zivot-Andrews Iterativo: 3 Breakpoints Sequenciais ===\n")
+cat("H0: raiz unitaria sem quebra  |  Rejeitar H0 se |t| > |val critico|\n\n")
+knitr::kable(za_summary,
+             col.names = c("Rodada","Breakpoint (dia)","Data","t-stat",
+                           "CV 1%","CV 5%","CV 10%","Rejeita H0?"),
+             caption = "Zivot-Andrews Iterativo: 3 quebras sequenciais no log-preco IBM")
+
+# ---- Mapeamento para indices globais intradiarios ----
+za_bp_rows   <- sapply(za_list, `[[`, "bp_global")
+crash_idx_za <- map_to_global(za_bp_rows)
+
+cat(sprintf("\nIndices globais intradiarios (crash_idx_za): %s\n",
+            paste(crash_idx_za, collapse = ", ")))
+
+# --- Grafico: log-preco com os 3 breakpoints ZA marcados ---
+za_dates_df <- data.frame(
+  x     = za_bp_rows,
+  label = paste0("ZA", seq_along(za_bp_rows))
+)
+
+ggplot(data.frame(t = seq_len(n_daily), lp = log_price),
+       aes(x = t, y = lp)) +
+  geom_line(color = "black", linewidth = 0.3) +
+  geom_vline(data = za_dates_df,
+             aes(xintercept = x), color = "#8E44AD",
+             linetype = "dotted", linewidth = 0.9) +
+  geom_label(data = za_dates_df,
+             aes(x = x, y = max(log_price, na.rm = TRUE) * 0.97,
+                 label = label),
+             color = "#8E44AD", size = 3) +
+  labs(title    = "Zivot-Andrews Iterativo: 3 Breakpoints no Log-Preco IBM",
+       subtitle = "ZA1 = serie completa | ZA2 = sub-serie antes de ZA1 | ZA3 = sub-serie antes de ZA2",
+       x = "Dia (indice)", y = "Log-Preco") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+## Teste de Chow: Bai-Perron e Zivot-Andrews
+
+> **Teste de Chow (1960) — Quebra na Media**
+>
+> Dado um ponto de quebra candidato $\tau$ na serie $\{y_t\}_{t=1}^{n}$, o teste de Chow verifica se a media do processo muda antes e depois de $\tau$.
+>
+> **Estatistica F:** $$F = \frac{(RSS_R - RSS_U)\,/\,k}{RSS_U\,/\,(n - 2k)}$$ onde:
+>
+> -   $RSS_R = \sum_{t=1}^{n}(y_t - \bar{y})^2$ — residuos do modelo restrito (1 media global)
+> -   $RSS_U = \sum_{t=1}^{\tau}(y_t - \bar{y}_1)^2 + \sum_{t=\tau+1}^{n}(y_t - \bar{y}_2)^2$ — residuos do modelo irrestrito (2 medias)
+> -   $k = 1$ (somente intercepto)
+>
+> **Hipoteses:**
+>
+> -   $H_0$: $\mu_1 = \mu_2$ — sem quebra (mesma media em todo o periodo)
+> -   $H_1$: $\mu_1 \neq \mu_2$ — quebra estrutural na media em $\tau$
+>
+> Aplicado aqui sobre os **retornos diarios** em cada breakpoint identificado por Bai-Perron e por Zivot-Andrews. O teste valida se os pontos detectados correspondem a mudancas reais e estatisticamente significativas na media.
+
+```{r chow-test}
+chow_mean <- function(y, bp) {
+  n <- length(y)
+  if (is.na(bp) || bp < 2L || bp >= (n - 1L))
+    return(list(F_stat = NA_real_, p_val = NA_real_))
+  y1    <- y[seq_len(bp)]
+  y2    <- y[seq(bp + 1L, n)]
+  rss_r <- sum((y  - mean(y,  na.rm = TRUE))^2, na.rm = TRUE)
+  rss_u <- sum((y1 - mean(y1, na.rm = TRUE))^2, na.rm = TRUE) +
+           sum((y2 - mean(y2, na.rm = TRUE))^2, na.rm = TRUE)
+  k     <- 1L
+  f     <- ((rss_r - rss_u) / k) / (rss_u / (n - 2L * k))
+  pval  <- pf(f, df1 = k, df2 = n - 2L * k, lower.tail = FALSE)
+  list(F_stat = f, p_val = pval)
+}
+
+# ---- Mapeia indices globais intradiarios -> linha em dc_clean ----
+global_to_daily_row <- function(gidx_vec) {
+  vapply(gidx_vec, function(g) {
+    # Encontra a linha de dc_clean cujo last_global_idx e o mais proximo de g
+    diffs <- abs(dc_clean$last_global_idx - g)
+    idx   <- which.min(diffs)
+    if (length(idx) == 0L) NA_integer_ else as.integer(idx[1L])
+  }, integer(1))
+}
+
+bp_daily_rows <- global_to_daily_row(crash_idx_bp)
+za_daily_rows <- global_to_daily_row(crash_idx_za)
+
+# ---- Constroi tabela combinada (BP + ZA) ----
+make_chow_rows <- function(gidx_vec, daily_rows, prefix) {
+  do.call(rbind, lapply(seq_along(gidx_vec), function(k) {
+    res <- chow_mean(ret_daily, daily_rows[k])
+    data.frame(
+      metodo     = prefix,
+      evento     = paste0(prefix, "_", k),
+      crash_idx  = gidx_vec[k],
+      trade_date = if (!is.na(daily_rows[k]))
+                     as.character(dc_clean$trade_date[daily_rows[k]])
+                   else NA_character_,
+      F_stat     = round(res$F_stat, 4),
+      p_val      = round(res$p_val,  6),
+      rejeita_H0 = ifelse(!is.na(res$p_val) & res$p_val < 0.05, "Sim", "Nao")
+    )
+  }))
+}
+
+chow_tbl <- bind_rows(
+  make_chow_rows(crash_idx_bp, bp_daily_rows, "Bai-Perron"),
+  make_chow_rows(crash_idx_za, za_daily_rows, "Zivot-Andrews")
+) %>% arrange(crash_idx)
+
+cat("Teste de Chow — breakpoints Bai-Perron e Zivot-Andrews\n")
+cat("H0: sem quebra na media  |  Rejeitar H0 se p < 0.05\n\n")
+knitr::kable(chow_tbl,
+             col.names = c("Metodo","Evento","Idx intradiario","Data",
+                           "F-stat","p-valor","Rejeita H0?"),
+             caption = "Teste de Chow nos breakpoints de Bai-Perron e Zivot-Andrews")
+
+# --- Grafico: F-stat por evento ---
+ggplot(chow_tbl %>% filter(!is.na(F_stat)),
+       aes(x = reorder(evento, crash_idx), y = F_stat, fill = metodo)) +
+  geom_col(width = 0.6, alpha = 0.85) +
+  geom_hline(yintercept = qf(0.95, 1, nrow(dc_clean) - 2),
+             linetype = "dashed", color = "red", linewidth = 0.7) +
+  scale_fill_manual(values = c("Bai-Perron" = "#2980B9",
+                               "Zivot-Andrews" = "#8E44AD")) +
+  labs(title    = "Teste de Chow — F-estatistica por Breakpoint",
+       subtitle = "Linha vermelha = valor critico F (p=0.05)",
+       x = "Evento", y = "F-estatistica", fill = "Metodo") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1),
+        plot.title  = element_text(face = "bold"))
+```
+
+## Teste ARCH-LM: Mudancas de Volatilidade nos Breakpoints
+
+> **Teste ARCH-LM (Engle, 1982) — Clustering de Volatilidade**
+>
+> O Multiplicador de Lagrange de Engle testa se os quadrados dos residuos $\hat{\varepsilon}_t^2$ possuem autocorrelacao, o que indica heterocedasticidade condicional (variancia nao constante ao longo do tempo).
+>
+> O modelo ARCH(q) postula: $$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i\,\varepsilon_{t-i}^2$$
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+>
+> O teste LM regride $\hat{\varepsilon}_t^2$ em suas $q$ defasagens: $$LM = n \cdot R^2 \;\sim\; \chi^2(q)$$
+>
+> **Hipoteses:**
+>
+<<<<<<< HEAD
+> - $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
+> - $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
+>
+> **Calibracao:** defasagens fixadas em $q = 5$ (5 minutos de retornos intradiarios), capturando clustering de curto prazo tipico em mercados de alta frequencia. Janelas de 10.000 observacoes (\~26 dias de pregao) antes e depois de cada breakpoint. Nivel de significancia $\alpha = 0.05$.
+>
+> **O que detecta:** rejeitar $H_0$ confirma que a volatilidade e heterocedástica ao redor do breakpoint — movimentos grandes tendem a ser seguidos de movimentos grandes — validando a relevancia economica do ponto de quebra. O teste e aplicado separadamente para os breakpoints de cada valor de $h$.
+=======
+> -   $H_0$: $\alpha_1 = \cdots = \alpha_q = 0$ — sem efeito ARCH (variancia constante)
+> -   $H_1$: pelo menos um $\alpha_i \neq 0$ — volatilidade depende do passado
+>
+> **Calibracao:** O numero de defasagens e fixado em $q = 5$, correspondendo a 5 minutos de retornos intradiarios. Esse valor captura o efeito de *clustering* de curto prazo tipico em mercados de alta frequencia, sem introduzir ruido de defasagens longas. A janela de analise e de 10.000 observacoes (aprox. 26 dias de pregao) antes e depois de cada breakpoint, garantindo dados suficientes para estimacao robusta da estatistica LM. O nivel de significancia adotado e $\alpha = 0.05$.
+>
+> **O que detecta:** presenca de *clusters* de volatilidade — periodos onde movimentos grandes tendem a ser seguidos de movimentos grandes. Rejeitar $H_0$ confirma que a volatilidade e heterocedástica e que os retornos em torno do breakpoint nao sao i.i.d., o que valida a relevancia do ponto de quebra do ponto de vista da dinamica de risco.
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+
+```{r arch-test}
+run_arch_lm <- function(r, lag = 5) {
+  r <- as.numeric(na.omit(r))
+  if (length(r) < lag + 10) return(list(stat = NA_real_, pval = NA_real_))
+  tryCatch({
+    fit <- FinTS::ArchTest(r, lags = lag)
+    list(stat = unname(fit$statistic), pval = fit$p.value)
+  }, error = function(e) list(stat = NA_real_, pval = NA_real_))
+}
+
+<<<<<<< HEAD
+# ---- Constroi linhas ARCH para um conjunto de breakpoints ----
+make_arch_rows <- function(gidx_vec, prefix) {
+  do.call(rbind, lapply(seq_along(gidx_vec), function(k) {
+    X      <- gidx_vec[k]
+    r_pre  <- rets_full[safe_window(X + PRE_START_OFFSET,  X + PRE_END_OFFSET,  n_total)]
+    r_post <- rets_full[safe_window(X + POST_START_OFFSET, X + POST_END_OFFSET, n_total)]
+    a_pre  <- run_arch_lm(r_pre)
+    a_post <- run_arch_lm(r_post)
+    data.frame(
+      h          = prefix,
+      evento     = paste0(prefix, "_", k),
+      crash_idx  = X,
+      trade_date = format(dt1$Period[min(X, n_total)], "%Y-%m-%d"),
+      LM_pre     = round(a_pre$stat,  4),
+      p_pre      = round(a_pre$pval,  6),
+      LM_post    = round(a_post$stat, 4),
+      p_post     = round(a_post$pval, 6),
+      ARCH_pre   = ifelse(!is.na(a_pre$pval)  & a_pre$pval  < 0.05, "Sim", "Nao"),
+      ARCH_post  = ifelse(!is.na(a_post$pval) & a_post$pval < 0.05, "Sim", "Nao")
+    )
+  }))
+}
+
+arch_tbl <- bind_rows(
+  make_arch_rows(crash_idx_bp,      "BP h=0.05"),
+  make_arch_rows(crash_idx_bp_h10,  "BP h=0.10"),
+  make_arch_rows(crash_idx_bp_h01,  "BP h=0.01")
+) %>% arrange(h, crash_idx)
+
+cat("=== Teste ARCH-LM (lags=5) — pre vs pos breakpoint ===\n")
+cat("H0: sem efeito ARCH (variancia constante)  |  Rejeitar H0 se p < 0.05\n\n")
+knitr::kable(arch_tbl,
+             col.names = c("h","Evento","Idx","Data",
+                           "LM (pre)","p (pre)","LM (pos)","p (pos)",
+                           "ARCH pre?","ARCH pos?"),
+             caption = "Teste ARCH-LM(5): clustering de volatilidade pre vs pos breakpoint — tres valores de h")
+
+# ---- Grafico: LM-stat pre vs pos por h ----
+chi_crit <- qchisq(0.95, df = 5)
+
+arch_long <- arch_tbl %>%
+  select(h, evento, crash_idx, LM_pre, LM_post) %>%
+=======
+# ---- Constroi eventos para cada conjunto de breakpoints ----
+make_events <- function(gidx_vec, prefix) {
+  lapply(seq_along(gidx_vec), function(k) {
+    X <- gidx_vec[k]
+    list(
+      crash_idx   = X,
+      crash_date  = dt1$Period[min(X, n_total)],
+      crash_ret   = rets_full[min(X, n_total)],
+      event_label = paste0(prefix, "_", k),
+      metodo      = prefix,
+      pre    = safe_window(X + PRE_START_OFFSET,  X + PRE_END_OFFSET,  n_total),
+      during = safe_window(X + DUR_START_OFFSET,  X + DUR_END_OFFSET,  n_total),
+      post   = safe_window(X + POST_START_OFFSET, X + POST_END_OFFSET, n_total)
+    )
+  })
+}
+
+events_bp <- make_events(crash_idx_bp, "BP")
+events_za <- make_events(crash_idx_za, "ZA")
+all_events <- c(events_bp, events_za)
+
+# ---- Aplica ARCH-LM em pre e pos de cada evento ----
+arch_rows <- do.call(rbind, lapply(all_events, function(ev) {
+  r_pre  <- rets_full[ev$pre]
+  r_post <- rets_full[ev$post]
+  a_pre  <- run_arch_lm(r_pre)
+  a_post <- run_arch_lm(r_post)
+  data.frame(
+    metodo       = ev$metodo,
+    evento       = ev$event_label,
+    crash_idx    = ev$crash_idx,
+    trade_date   = format(ev$crash_date, "%Y-%m-%d"),
+    LM_pre       = round(a_pre$stat,  4),
+    p_pre        = round(a_pre$pval,  6),
+    LM_post      = round(a_post$stat, 4),
+    p_post       = round(a_post$pval, 6),
+    ARCH_pre     = ifelse(!is.na(a_pre$pval)  & a_pre$pval  < 0.05, "Sim", "Nao"),
+    ARCH_post    = ifelse(!is.na(a_post$pval) & a_post$pval < 0.05, "Sim", "Nao")
+  )
+})) %>% arrange(crash_idx)
+
+cat("=== Teste ARCH-LM (lags=5) — pre vs pos breakpoint ===\n")
+cat("H0: sem efeito ARCH (variancia constante)  |  Rejeitar H0 se p < 0.05\n\n")
+knitr::kable(arch_rows,
+             col.names = c("Metodo","Evento","Idx","Data",
+                           "LM (pre)","p (pre)","LM (pos)","p (pos)",
+                           "ARCH pre?","ARCH pos?"),
+             caption = "Teste ARCH-LM(5): clustering de volatilidade pre vs pos breakpoint (BP e ZA)")
+
+# --- Grafico: LM-stat pre vs pos por evento ---
+arch_long <- arch_rows %>%
+  select(evento, metodo, LM_pre, LM_post) %>%
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+  pivot_longer(cols = c(LM_pre, LM_post),
+               names_to  = "fase",
+               values_to = "LM_stat") %>%
+  mutate(fase = ifelse(fase == "LM_pre", "pre", "post"),
+         fase = factor(fase, levels = c("pre", "post")))
+
+<<<<<<< HEAD
+print(
+  ggplot(arch_long %>% filter(!is.na(LM_stat)),
+         aes(x = reorder(evento, crash_idx), y = LM_stat, fill = fase)) +
+    geom_col(position = "dodge", width = 0.65, alpha = 0.85) +
+    geom_hline(yintercept = chi_crit, linetype = "dashed",
+               color = "red", linewidth = 0.7) +
+    facet_wrap(~ h, scales = "free_x", ncol = 1) +
+    scale_fill_manual(values = c(pre = "#2ECC71", post = "#E74C3C")) +
+    labs(title    = "ARCH-LM (q=5) — Estatistica LM: pre vs pos breakpoint",
+         subtitle = paste0("Linha vermelha = chi^2(5) critico (p=0.05, val=",
+                           round(chi_crit, 2), ") | Facetas = valor de h"),
+         x = "Evento", y = "LM-estatistica", fill = "Fase") +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1),
+          plot.title  = element_text(face = "bold"),
+          strip.text  = element_text(face = "bold"))
+)
+```
+
+## Visualizacao Comparativa: Bai-Perron — Comparacao entre h
+=======
+chi_crit <- qchisq(0.95, df = 5)
+
+print(
+  ggplot(arch_long %>% filter(!is.na(LM_stat)),
+         aes(x = reorder(evento, LM_stat), y = LM_stat, fill = fase)) +
+    geom_col(position = "dodge", width = 0.65, alpha = 0.85) +
+    geom_hline(yintercept = chi_crit, linetype = "dashed",
+               color = "red", linewidth = 0.7) +
+    facet_wrap(~ metodo, scales = "free_x") +
+    scale_fill_manual(values = c(pre = "#2ECC71", post = "#E74C3C")) +
+    labs(title    = "ARCH-LM (q=5) — Estatistica LM: pre vs pos breakpoint",
+         subtitle = paste0("Linha vermelha = chi^2(5) critico (p=0.05, val=",
+                           round(chi_crit, 2), ")"),
+         x = "Evento", y = "LM-estatistica", fill = "Fase") +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1),
+          plot.title  = element_text(face = "bold"))
+)
+```
+
+## Visualizacao Comparativa: Bai-Perron e Zivot-Andrews
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+
+```{r comparative-plot}
+price_max <- max(dt1$Close.1min, na.rm = TRUE)
+
+<<<<<<< HEAD
+# ---- Monta data.frame com todos os breakpoints dos tres h ----
+make_marks <- function(gidx_vec, h_label, y_frac) {
+  if (length(gidx_vec) == 0) return(NULL)
+  data.frame(
+    x      = gidx_vec,
+    h      = h_label,
+    label  = paste0(gsub("h = ", "h", h_label), "_", seq_along(gidx_vec)),
+    y_pos  = price_max * y_frac,
+    stringsAsFactors = FALSE
+  )
+}
+
+all_marks <- bind_rows(
+  make_marks(crash_idx_bp,     "h = 0.05", 0.89),
+  make_marks(crash_idx_bp_h10, "h = 0.10", 0.76),
+  make_marks(crash_idx_bp_h01, "h = 0.01", 0.63)
+) %>%
+  mutate(h = factor(h, levels = c("h = 0.05", "h = 0.10", "h = 0.01")))
+
+color_h  <- c("h = 0.05" = "#2980B9", "h = 0.10" = "#E67E22", "h = 0.01" = "#27AE60")
+lty_h    <- c("h = 0.05" = "solid",   "h = 0.10" = "dashed",  "h = 0.01" = "dotted")
+=======
+all_marks <- bind_rows(
+  if (length(crash_idx_bp) > 0)
+    data.frame(x      = crash_idx_bp,
+               metodo = "Bai-Perron",
+               label  = paste0("BP", seq_along(crash_idx_bp)),
+               y_pos  = price_max * 0.89,
+               stringsAsFactors = FALSE),
+  if (length(crash_idx_za) > 0)
+    data.frame(x      = crash_idx_za,
+               metodo = "Zivot-Andrews",
+               label  = paste0("ZA", seq_along(crash_idx_za)),
+               y_pos  = price_max * 0.73,
+               stringsAsFactors = FALSE)
+) %>%
+  mutate(metodo = factor(metodo, levels = c("Bai-Perron", "Zivot-Andrews")))
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+
+print(
+  ggplot(data.frame(index = seq_len(n_total), price = dt1$Close.1min),
+         aes(x = index, y = price)) +
+    geom_line(color = "black", linewidth = 0.3) +
+    geom_vline(data = all_marks,
+<<<<<<< HEAD
+               aes(xintercept = x, color = h, linetype = h),
+               linewidth = 0.75, alpha = 0.85) +
+    geom_label(data = all_marks,
+               aes(x = x, y = y_pos, label = label, color = h),
+               size = 2.6, show.legend = FALSE) +
+    scale_color_manual(values = color_h) +
+    scale_linetype_manual(values = lty_h) +
+    labs(
+      title    = "IBM - Bai-Perron: Comparacao entre valores de h",
+      subtitle = "Aplicado sobre log(r_t^2) | h controla o tamanho minimo do segmento",
+      x = "Indice (observacao)", y = "Preco de Fechamento",
+      color = "h", linetype = "h"
+=======
+               aes(xintercept = x, color = metodo, linetype = metodo),
+               linewidth = 0.75, alpha = 0.85) +
+    geom_label(data = all_marks,
+               aes(x = x, y = y_pos, label = label, color = metodo),
+               size = 2.8, show.legend = FALSE) +
+    scale_color_manual(
+      values = c("Bai-Perron"    = "#2980B9",
+                 "Zivot-Andrews" = "#8E44AD")
+    ) +
+    scale_linetype_manual(
+      values = c("Bai-Perron"    = "solid",
+                 "Zivot-Andrews" = "dotted")
+    ) +
+    labs(
+      title    = "IBM - Comparacao: Bai-Perron vs Zivot-Andrews",
+      subtitle = "BP = Bai-Perron (media |ret|) | ZA = Zivot-Andrews iterativo (log-preco)",
+      x = "Indice (observacao)", y = "Preco de Fechamento",
+      color = "Metodo", linetype = "Metodo"
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+)
+```
+
+## Visualizacao: Janelamentos dos Breakpoints
+
+```{r price-segments-plot}
+<<<<<<< HEAD
+fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
+
+# ---- Funcao auxiliar: plota janelas para um conjunto de breakpoints ----
+plot_windows_for_h <- function(gidx_vec, h_label, line_color) {
+  top5_vec <- head(gidx_vec, 5)
+  if (length(top5_vec) == 0) {
+    cat(sprintf("[%s] Nenhum breakpoint disponivel.\n", h_label))
+    return(invisible(NULL))
+  }
+
+  for (k in seq_along(top5_vec)) {
+    X <- top5_vec[k]
+
+    segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
+      win <- switch(nm,
+        pre    = safe_window(X - 10000, X,         n_total),
+        during = safe_window(X,         X + 10000, n_total),
+        post   = safe_window(X + 10000, X + 20000, n_total)
+      )
+      if (is.null(win)) return(NULL)
+      data.frame(janela = nm, xmin = win[1] - 0.5, xmax = tail(win, 1) + 0.5)
+    }))
+
+    zoom_s  <- max(1L,      X - 22000L)
+    zoom_e  <- min(n_total, X + 32000L)
+    plot_df <- data.frame(index = seq_len(n_total),
+                          price = dt1$Close.1min)[zoom_s:zoom_e, ]
+
+    crash_date <- dt1$Period[min(X, n_total)]
+    crash_ret  <- rets_full[min(X, n_total)]
+
+    print(
+      ggplot(plot_df, aes(x = index, y = price)) +
+        geom_rect(data = segs_df,
+                  aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
+                  inherit.aes = FALSE, alpha = 0.30) +
+        geom_line(color = "black", linewidth = 0.35) +
+        geom_vline(xintercept = X, color = line_color,
+                   linewidth = 0.9, linetype = "solid") +
+        scale_fill_manual(name = "Janela", values = fill_colors_seg) +
+        labs(
+          title    = paste0("[", h_label, "] Evento_", k,
+                            " — Janelamentos sobre Preco IBM"),
+          subtitle = paste0(
+            "Linha = breakpoint (", format(crash_date, "%Y-%m-%d"),
+            ") | Ret: ", round(crash_ret * 100, 3), "%",
+            "\npre=[X-10k, X]  |  during=[X, X+10k]  |  post=[X+10k, X+20k]"
+          ),
+          x = "Indice (observacao global)", y = "Preco de Fechamento"
+        ) +
+        theme_minimal(base_size = 11) +
+        theme(plot.title = element_text(face = "bold"), legend.position = "top") +
+        coord_cartesian(expand = FALSE)
+    )
+  }
+}
+
+# ---- Plota para cada valor de h ----
+plot_windows_for_h(crash_idx_bp,     "h = 0.05", "#2980B9")
+plot_windows_for_h(crash_idx_bp_h10, "h = 0.10", "#E67E22")
+plot_windows_for_h(crash_idx_bp_h01, "h = 0.01", "#27AE60")
+=======
+# ============================================================
+# Escolha o vetor a visualizar (altere APENAS esta linha):
+#   crash_idx_bp — Bai-Perron (quebras na media de |ret|)
+#   crash_idx_za — Zivot-Andrews iterativo (log-preco)
+# ============================================================
+active_crash_vec <- crash_idx_za   # <-- ALTERE AQUI
+
+top5_vec <- head(active_crash_vec, 5)
+
+events_viz <- lapply(seq_along(top5_vec), function(k) {
+  X <- top5_vec[k]
+  list(
+    crash_idx   = X,
+    crash_date  = dt1$Period[min(X, n_total)],
+    crash_ret   = rets_full[min(X, n_total)],
+    event_label = paste0("Evento_", k),
+    pre    = safe_window(X - 10000, X,         n_total),
+    during = safe_window(X,         X + 10000, n_total),
+    post   = safe_window(X + 10000, X + 20000, n_total)
+  )
+})
+
+fill_colors_seg <- c(pre = "#E8FA22", during = "#FC886D", post = "#6DD6FC")
+
+for (ev in events_viz) {
+  segs_df <- do.call(rbind, lapply(c("pre", "during", "post"), function(nm) {
+    idx <- ev[[nm]]
+    if (is.null(idx)) return(NULL)
+    data.frame(janela = nm, xmin = idx[1] - 0.5, xmax = tail(idx, 1) + 0.5)
+  }))
+
+  zoom_s  <- max(1L,      ev$crash_idx - 22000L)
+  zoom_e  <- min(n_total, ev$crash_idx + 32000L)
+  plot_df <- data.frame(index = seq_len(n_total),
+                        price = dt1$Close.1min)[zoom_s:zoom_e, ]
+
+  print(
+    ggplot(plot_df, aes(x = index, y = price)) +
+      geom_rect(data = segs_df,
+                aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = janela),
+                inherit.aes = FALSE, alpha = 0.30) +
+      geom_line(color = "black", linewidth = 0.35) +
+      geom_vline(xintercept = ev$crash_idx, color = "red",
+                 linewidth = 0.9, linetype = "solid") +
+      scale_fill_manual(name = "Janela", values = fill_colors_seg) +
+      labs(
+        title    = paste0(ev$event_label, " - Janelamentos sobre Preco IBM"),
+        subtitle = paste0(
+          "Linha vermelha = breakpoint (", format(ev$crash_date, "%Y-%m-%d"),
+          ") | Ret: ", round(ev$crash_ret * 100, 3), "%",
+          "\npre=[X-10k, X]  |  during=[X, X+10k]  |  post=[X+10k, X+20k]"
+        ),
+        x = "Indice (observacao global)", y = "Preco de Fechamento"
+      ) +
+      theme_minimal(base_size = 11) +
+      theme(plot.title = element_text(face = "bold"), legend.position = "top") +
+      coord_cartesian(expand = FALSE)
+  )
+}
+>>>>>>> 2d860218ceb3c0badd819cb37eb44d02bbb2c977
+```

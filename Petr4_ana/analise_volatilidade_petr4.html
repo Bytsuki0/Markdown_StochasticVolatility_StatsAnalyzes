@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.5.41">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Gustavo Vitor da Silva">
+
+<title>Análise de Volatilidade Estocástica e Retornos Intradiários - PETR4</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="analise_volatilidade_petr4_files/libs/clipboard/clipboard.min.js"></script>
+<script src="analise_volatilidade_petr4_files/libs/quarto-html/quarto.js"></script>
+<script src="analise_volatilidade_petr4_files/libs/quarto-html/popper.min.js"></script>
+<script src="analise_volatilidade_petr4_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="analise_volatilidade_petr4_files/libs/quarto-html/anchor.min.js"></script>
+<link href="analise_volatilidade_petr4_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="analise_volatilidade_petr4_files/libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="analise_volatilidade_petr4_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="analise_volatilidade_petr4_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="analise_volatilidade_petr4_files/libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Análise de Volatilidade Estocástica e Retornos Intradiários - PETR4</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Gustavo Vitor da Silva </p>
+          </div>
+  </div>
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="introdução" class="level2">
+<h2 class="anchored" data-anchor-id="introdução">Introdução</h2>
+<p>Este relatório explora o comportamento da volatilidade e dos retornos da ação PETR4 ao longo de 2021, com dados de frequência de 1 minuto extraídos da plataforma MetaTrader. Utilizamos modelos de volatilidade estocástica via <code>stochvol</code>, comparações com volatilidade realizada, e examinamos propriedades de clustering de volatilidade.</p>
+</section>
+<section id="leitura-e-pré-processamento-dos-dados" class="level2">
+<h2 class="anchored" data-anchor-id="leitura-e-pré-processamento-dos-dados">Leitura e Pré-processamento dos Dados</h2>
+<ul>
+<li>Remoção de janelas de abertura com menor liquidez (10:00 até 10:20) e dos últimos minutos de pregão (após 16:55).</li>
+<li>Exclusão do feriado em 17/02/2021.</li>
+<li>Conversão para série temporal (<code>xts</code>) e remoção de outliers extremos substituindo-os pela observação anterior.</li>
+</ul>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>os <span class="ot">&lt;-</span> <span class="fu">Sys.info</span>()[<span class="st">"sysname"</span>]</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span>(os <span class="sc">==</span> <span class="st">"Windows"</span>) {</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  dt.intra <span class="ot">&lt;-</span> <span class="fu">read.csv</span>(<span class="st">"D:/Code/R_studio/Petr4_ana/dt_1min_PETR4_2021_metatrader.csv"</span>, </span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>                       <span class="at">header =</span> <span class="cn">TRUE</span>, <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span>, </span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>                       <span class="at">sep =</span> <span class="st">";"</span>, <span class="at">dec =</span> <span class="st">","</span>)</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>} <span class="cf">else</span> <span class="cf">if</span>(os <span class="sc">==</span> <span class="st">"Linux"</span>) {</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  dt.intra <span class="ot">&lt;-</span> <span class="fu">read.csv</span>(<span class="st">"~/Documentos/Coding/Statistics_in_R/Petr4_ana/dt_1min_PETR4_2021_metatrader.csv"</span>, </span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>                       <span class="at">header =</span> <span class="cn">TRUE</span>, <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span>, </span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>                       <span class="at">sep =</span> <span class="st">";"</span>, <span class="at">dec =</span> <span class="st">","</span>)</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>dt1 <span class="ot">&lt;-</span> <span class="fu">as_tibble</span>(dt.intra) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">Period =</span> <span class="fu">ymd_hms</span>(X)) <span class="sc">%&gt;%</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(<span class="sc">-</span>X) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="sc">!</span>(<span class="fu">hour</span>(Period) <span class="sc">==</span> <span class="dv">10</span> <span class="sc">&amp;</span> <span class="fu">minute</span>(Period) <span class="sc">&lt;</span> <span class="dv">20</span>)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="fu">hour</span>(Period) <span class="sc">&lt;</span> <span class="dv">17</span>) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="sc">!</span>(<span class="fu">hour</span>(Period) <span class="sc">==</span> <span class="dv">16</span> <span class="sc">&amp;</span> <span class="fu">minute</span>(Period) <span class="sc">&gt;</span> <span class="dv">54</span>)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="sc">!</span>(<span class="fu">date</span>(Period) <span class="sc">==</span> <span class="st">"2021-02-17"</span>)) <span class="sc">%&gt;%</span> </span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(Period)</span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>ret<span class="fl">.1</span>min <span class="ot">&lt;-</span> <span class="fu">as.xts</span>(dt1<span class="sc">$</span>Ret<span class="fl">.1</span>min, <span class="at">order.by =</span> dt1<span class="sc">$</span>Period)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="observação-inicial" class="level2">
+<h2 class="anchored" data-anchor-id="observação-inicial">Observação inicial</h2>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(ret<span class="fl">.1</span>min, <span class="at">main=</span><span class="st">"PETR4 Retornos 1min"</span>, <span class="at">col=</span><span class="st">"black"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-2-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">boxplot</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min), <span class="at">main=</span><span class="st">"Boxplot dos Retornos 1min"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-2-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="identificação-e-remoçãode-outliers" class="level2">
+<h2 class="anchored" data-anchor-id="identificação-e-remoçãode-outliers">Identificação e remoçãode Outliers</h2>
+<p>Observamos os Outliers presentes nos valores maximos e minimos dos retornos. Com isso os removemos observamos novamente os gráficos de boxplot e a série temporal.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>warning<span class="ot">=</span><span class="cn">FALSE</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>message<span class="ot">=</span><span class="cn">FALSE</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Teste ADF e visualizações iniciais</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="fu">par</span>(<span class="at">mfrow=</span><span class="fu">c</span>(<span class="dv">1</span>,<span class="dv">1</span>))</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Identificar outliers</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>idx_min <span class="ot">&lt;-</span> <span class="fu">which.min</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min))</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>idx_max <span class="ot">&lt;-</span> <span class="fu">which.max</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min))</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Substituir outliers pela observação anterior</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>ret<span class="fl">.1</span>min[idx_min] <span class="ot">&lt;-</span> ret<span class="fl">.1</span>min[idx_min <span class="sc">-</span> <span class="dv">1</span>]</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>ret<span class="fl">.1</span>min[idx_max] <span class="ot">&lt;-</span> ret<span class="fl">.1</span>min[idx_max <span class="sc">-</span> <span class="dv">1</span>]</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="fu">plot.ts</span>(ret<span class="fl">.1</span>min)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-3-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb5"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">boxplot</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-3-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="testes-de-estacionariedade" class="level2">
+<h2 class="anchored" data-anchor-id="testes-de-estacionariedade">Testes de Estacionariedade</h2>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>tseries<span class="sc">::</span><span class="fu">adf.test</span>(ret<span class="fl">.1</span>min)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in tseries::adf.test(ret.1min): p-value smaller than printed p-value</code></pre>
+</div>
+<div class="cell-output cell-output-stdout">
+<pre><code>
+    Augmented Dickey-Fuller Test
+
+data:  ret.1min
+Dickey-Fuller = -34.447, Lag order = 35, p-value = 0.01
+alternative hypothesis: stationary</code></pre>
+</div>
+</div>
+<p>Resultado mostra que os retornos são estacionários, o que é esperado para séries de retornos.</p>
+</section>
+<section id="analises-de-têndencias-pré-e-pós-queda" class="level2">
+<h2 class="anchored" data-anchor-id="analises-de-têndencias-pré-e-pós-queda">Analises de têndencias pré e pós queda</h2>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb9"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>  dados_xts <span class="ot">&lt;-</span> <span class="fu">xts</span>(dt1[, <span class="fu">c</span>(<span class="st">"Close.1min"</span>, <span class="st">"Ret.1min"</span>)], <span class="at">order.by =</span> dt1<span class="sc">$</span>Period)</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  idx_min <span class="ot">&lt;-</span> <span class="fu">which.min</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min))</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  idx_max <span class="ot">&lt;-</span> <span class="fu">which.max</span>(<span class="fu">as.double</span>(ret<span class="fl">.1</span>min))</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  dados_xts[idx_min] <span class="ot">&lt;-</span> dados_xts[idx_min <span class="sc">-</span> <span class="dv">1</span>]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in NextMethod(.Generic): número de itens a substituir não é um múltiplo
+do comprimento do substituto</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb11"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>  dados_xts[idx_max] <span class="ot">&lt;-</span> dados_xts[idx_max <span class="sc">-</span> <span class="dv">1</span>]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stderr">
+<pre><code>Warning in NextMethod(.Generic): número de itens a substituir não é um múltiplo
+do comprimento do substituto</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>  p2 <span class="ot">=</span> idx_min <span class="sc">+</span><span class="dv">10000</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb14"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>dados_xts<span class="sc">$</span>LogRet<span class="fl">.1</span>min <span class="ot">&lt;-</span> <span class="fu">log</span>(<span class="dv">1</span> <span class="sc">+</span> dados_xts<span class="sc">$</span>Ret<span class="fl">.1</span>min)</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>dados_xts <span class="ot">&lt;-</span> <span class="fu">na.omit</span>(dados_xts)</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>calc_volatilidade_historica <span class="ot">&lt;-</span> <span class="cf">function</span>(retornos, <span class="at">janela =</span> <span class="dv">21</span>) {</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  vol_hist <span class="ot">&lt;-</span> <span class="fu">rollapply</span>(retornos, <span class="at">width =</span> janela, </span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>                        <span class="at">FUN =</span> <span class="cf">function</span>(x) <span class="fu">sd</span>(x, <span class="at">na.rm =</span> <span class="cn">TRUE</span>), </span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>                        <span class="at">by.column =</span> <span class="cn">TRUE</span>, </span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>                        <span class="at">align =</span> <span class="st">"right"</span>)</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">return</span>(vol_hist)</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>dados_xts<span class="sc">$</span>Vol_Hist_30min <span class="ot">&lt;-</span> <span class="fu">calc_volatilidade_historica</span>(dados_xts<span class="sc">$</span>LogRet<span class="fl">.1</span>min, <span class="at">janela =</span> <span class="dv">30</span>)</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>minutos_ano <span class="ot">&lt;-</span> <span class="dv">252</span> <span class="sc">*</span> <span class="dv">390</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>dados_xts<span class="sc">$</span>Vol_Anual <span class="ot">&lt;-</span> dados_xts<span class="sc">$</span>Vol_Hist_30min <span class="sc">*</span> <span class="fu">sqrt</span>(minutos_ano)</span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>volhist30min<span class="ot">=</span>dados_xts<span class="sc">$</span>Vol_Hist_30min</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(volhist30min[<span class="dv">1</span><span class="sc">:</span><span class="dv">10000</span>], <span class="at">main =</span> <span class="st">"Volatilidade (Janela 30 min) Pré queda"</span>, <span class="at">xlab =</span> <span class="st">"Data"</span>, <span class="at">ylab =</span> <span class="st">"Volatilidade"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-6-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(volhist30min[idx_min<span class="sc">:</span>p2], <span class="at">main =</span> <span class="st">"Volatilidade (Janela 30 min) Pós queda"</span>, <span class="at">xlab =</span> <span class="st">"Data"</span>, <span class="at">ylab =</span> <span class="st">"Volatilidade"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-6-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb16"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>warning<span class="ot">=</span><span class="cn">FALSE</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>message<span class="ot">=</span><span class="cn">FALSE</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>log_ret_vec <span class="ot">&lt;-</span> <span class="fu">as.numeric</span>(dados_xts<span class="sc">$</span>LogRet<span class="fl">.1</span>min)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>ret_vec <span class="ot">&lt;-</span> <span class="fu">as.numeric</span>(dados_xts<span class="sc">$</span>Ret<span class="fl">.1</span>min)</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Visualizando ACF e PACF</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="fu">par</span>(<span class="at">mfrow =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>))</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a><span class="fu">acf</span>(log_ret_vec[<span class="dv">1</span><span class="sc">:</span><span class="dv">10000</span>], <span class="at">main =</span> <span class="st">"ACF - Log-Retornos Pré queda"</span>, <span class="at">na.action =</span> na.pass)</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="fu">pacf</span>(log_ret_vec[<span class="dv">1</span><span class="sc">:</span><span class="dv">10000</span>], <span class="at">main =</span> <span class="st">"PACF - Log-Retornos Pré queda"</span>, <span class="at">na.action =</span> na.pass)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-7-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb17"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">par</span>(<span class="at">mfrow =</span> <span class="fu">c</span>(<span class="dv">1</span>, <span class="dv">2</span>))</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="fu">acf</span>(log_ret_vec[idx_min<span class="sc">:</span>p2], <span class="at">main =</span> <span class="st">"ACF - Log-Retornos Pós queda"</span>, <span class="at">na.action =</span> na.pass)</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="fu">pacf</span>(log_ret_vec[idx_min<span class="sc">:</span>p2], <span class="at">main =</span> <span class="st">"PACF - Log-Retornos Pós queda"</span>, <span class="at">na.action =</span> na.pass)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-7-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="objetivos" class="level2">
+<h2 class="anchored" data-anchor-id="objetivos">1. Objetivos</h2>
+<p>Comparação das as funções de autocorrelação (ACF) e autocorrelação parcial (PACF) dos log-retornos intradiários de PETR4 <strong>antes</strong> e <strong>depois</strong> de uma queda da opção.</p>
+</section>
+<section id="ajuste-do-modelo-de-volatilidade-estocástica" class="level2">
+<h2 class="anchored" data-anchor-id="ajuste-do-modelo-de-volatilidade-estocástica">Ajuste do Modelo de Volatilidade Estocástica</h2>
+<p>Ajustamos um modelo <code>svsample()</code> a dois blocos temporais:</p>
+<ol type="1">
+<li>Primeiros 10000 pontos antes do maior retorno absoluto negativo.</li>
+<li>10000 pontos após o menor retorno (queda abrupta) para comparar regimes.</li>
+<li>15000 pontos após analise anterior 10000 mil pontos são analisados para observar a recuperação do mercado a uma queda bruta.</li>
+</ol>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb18"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(sv_fit, <span class="at">showobs =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="fu">title</span>(<span class="at">main =</span> <span class="st">"Pré queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-8-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(sv_fit2, <span class="at">showobs =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="fu">title</span>(<span class="at">main =</span> <span class="st">"Pós queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-8-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot</span>(sv_fit3, <span class="at">showobs =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="fu">title</span>(<span class="at">main =</span> <span class="st">"Recuperação Pós queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-8-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<p>Analisando os dados pós e pré queda da bolsa podemos ver uma mudança principalmente nas distribuições normais de Mu, Phi e Sigma, onde podemos definir o que cada variavel nos diz como:</p>
+<section id="interpretação-de-μ-mu" class="level3">
+<h3 class="anchored" data-anchor-id="interpretação-de-μ-mu">Interpretação de μ (mu)</h3>
+<ol type="1">
+<li><p><strong>Média de longo prazo</strong></p>
+<ul>
+<li><p><strong>μ</strong> define o valor médio ao qual Log-volatilidade reverte em longo prazo.</p></li>
+<li><p>Processos com μ maior indicam que, em média, a volatilidade tende a ficar mais elevada.</p></li>
+</ul></li>
+<li><p><strong>“Drift” da volatilidade latente</strong></p>
+<ul>
+<li><p>Atua como termo constante que “puxa” o nível de volatilidade de volta ao seu ponto de equilíbrio</p></li>
+<li><p>Ao estimar o modelo, a média pontual de μ na distribuição posterior corresponde à média aritmética.</p></li>
+</ul></li>
+</ol>
+</section>
+<section id="interpretação-de-φ-phi" class="level3">
+<h3 class="anchored" data-anchor-id="interpretação-de-φ-phi">Interpretação de φ (phi)</h3>
+<ol type="1">
+<li><p><strong>Persistência (autoregressão)</strong></p>
+<ul>
+<li><p><strong>φ</strong> atua como coeficiente AR(1) medindo a “memória” da volatilidade.</p></li>
+<li><p>Se φ≈1, choques em ht−1 têm efeito duradouro​, resultando em <strong>clusters de volatilidade</strong>.</p></li>
+</ul>
+<p><strong>Estacionaridade</strong></p>
+<ul>
+<li><p>O modelo é estacionário somente se ∣ϕ∣&lt;1; valores absolutos acima quebram a estabilidade do processo latente.</p></li>
+<li><p>Estimações típicas em mercados emergentes mostram φ entre 0.95 e 0.99, indicando alta persistência.</p></li>
+</ul></li>
+</ol>
+</section>
+<section id="interpretação-de-σ-sigma" class="level3">
+<h3 class="anchored" data-anchor-id="interpretação-de-σ-sigma">Interpretação de σ (sigma)</h3>
+<ol type="1">
+<li><p><strong>Volatilidade da volatilidade</strong></p>
+<ul>
+<li><p><strong>σ</strong> é o desvio-padrão dos choques que afetam o processo de log-volatilidade</p></li>
+<li><p>Quanto maior σ, mais pronunciadas são as flutuações de curto prazo na volatilidade.</p></li>
+</ul></li>
+<li><p><strong>Incerteza dinâmica</strong></p>
+<ul>
+<li><p>Reflete a variabilidade intrínseca na evolução da volatilidade latente, controlando a rapidez das mudanças de regimes.</p></li>
+<li><p>Modelos com σ elevado tendem a capturar melhor eventos extremos (<em>fat tails</em>) e mudanças bruscas no risco.</p></li>
+</ul></li>
+</ol>
+</section>
+<section id="o-que-podemos-retirar-das-nossas-observações" class="level3">
+<h3 class="anchored" data-anchor-id="o-que-podemos-retirar-das-nossas-observações">O que podemos retirar das nossas observações</h3>
+<p>Em particular, <strong>μ</strong> é a média de longo prazo da log-volatilidade, <strong>φ</strong> mede a persistência ou “memória” do processo, e <strong>σ</strong> quantifica a volatilidade da própria volatilidade.</p>
+<hr>
+</section>
+</section>
+<section id="valores-estimados" class="level2">
+<h2 class="anchored" data-anchor-id="valores-estimados">Valores Estimados</h2>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Regime</th>
+<th>μ</th>
+<th>φ</th>
+<th>σ</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Pré-queda</strong></td>
+<td>–13.8</td>
+<td>0.97</td>
+<td>0.16</td>
+</tr>
+<tr class="even">
+<td><strong>Pós-queda</strong></td>
+<td>–13.3</td>
+<td>0.99</td>
+<td>0.12</td>
+</tr>
+<tr class="odd">
+<td><strong>Recuperação</strong></td>
+<td>–14.4</td>
+<td>0.98</td>
+<td>0.11</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="interpretação-dos-parâmetros" class="level2">
+<h2 class="anchored" data-anchor-id="interpretação-dos-parâmetros">Interpretação dos Parâmetros</h2>
+<section id="μ-nível-médio-de-longo-prazo" class="level3">
+<h3 class="anchored" data-anchor-id="μ-nível-médio-de-longo-prazo">1. μ — Nível Médio de Longo Prazo</h3>
+<ul>
+<li><strong>Pré-queda (μ ≃ –13.8):</strong> Nível médio moderado de log-volatilidade, indicando um mercado relativamente estável antes do choque.<br>
+</li>
+<li><strong>Pós-queda (μ ≃ –13.3):</strong> Aumento em μ sinaliza que a volatilidade média se elevou após o choque, refletindo comportamento mais errático e risco incrementado.<br>
+</li>
+<li><strong>Recuperação (μ ≃ –14.4):</strong> μ abaixo do nível pré-queda sugere um período de calmaria, com volatilidade média inferior ao patamar inicial</li>
+</ul>
+</section>
+<section id="φ-persistência-ar1" class="level3">
+<h3 class="anchored" data-anchor-id="φ-persistência-ar1">2. φ — Persistência (AR(1))</h3>
+<ul>
+<li><strong>Pré-queda (φ ≃ 0.97):</strong> Choques de volatilidade perduram vários minutos, caracterizando clusters de volatilidade típicos em séries financeiras.<br>
+</li>
+<li><strong>Pós-queda (φ ≃ 0.99):</strong> Persistência extrema, indicando que o impacto do choque permanece durante longo período e reduz a capacidade de “esquecer” choques passados.<br>
+</li>
+<li><strong>Recuperação (φ ≃ 0.98):</strong> Alta persistência, porém ligeiramente menor que no pós-queda, sinalizando retorno gradual a um regime menos grudado em choques passados.</li>
+</ul>
+</section>
+<section id="σ-volatilidade-da-volatilidade" class="level3">
+<h3 class="anchored" data-anchor-id="σ-volatilidade-da-volatilidade">3. σ — Volatilidade da Volatilidade</h3>
+<ul>
+<li><strong>Pré-queda (σ ≃ 0.16):</strong> Flutuações bruscas no nível latente de volatilidade, revelando instabilidade moderada na variância do processo.<br>
+</li>
+<li><strong>Pós-queda (σ ≃ 0.12):</strong> Apesar do regime mais volátil, a dispersão das mudanças na volatilidade latente diminui, indicando choques relativamente menos extremos no pós-queda.<br>
+</li>
+<li><strong>Recuperação (σ ≃ 0.11):</strong> Processo de volatilidade ainda mais estável, com menor amplitude de flutuações, corroborando o retorno a um regime de baixa incerteza.</li>
+</ul>
+</section>
+</section>
+<section id="concluindo" class="level2">
+<h2 class="anchored" data-anchor-id="concluindo">Concluindo</h2>
+<p>A análise dos parâmetros μ, φ e σ em diferentes regimes pós-queda revela mudanças profundas na dinâmica de risco de PETR4. Antes do choque, o mercado apresentava volatilidade moderada com alta instabilidade no processo latente. Após a queda, o aumento de μ e φ combinados com menor σ pautam um regime de alta persistência e volatilidade média elevada, porém com choques menos extremos. Na fase de recuperação, todos os parâmetros retornam a patamares de menor incerteza, indicando estabilização do mercado. Essas informações são cruciais para aprimorar modelos de previsão e estratégias de hedge em opções intradiárias.</p>
+</section>
+<section id="comparação-de-volatilidades" class="level2">
+<h2 class="anchored" data-anchor-id="comparação-de-volatilidades">Comparação de volatilidades</h2>
+<p>Criaremos o mesmo segmento utilizados acima como:</p>
+<p><strong>Segmento A:</strong> Valores de 1 a 10000 observações antes da queda brusca.</p>
+<p><strong>Segmento B:</strong> valores de 11600 a 22600 (2000 valores antes da queda e a queda em si).</p>
+<p><strong>Segmento C:</strong> valores de 33600 a 43600 observando a volatilidade do mercado semanas após a queda.</p>
+<p>Iremos comparar a volatilidade realizada desses pontos para entender como era uma função pré, durante e pós uma queda brusca no mercado.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>rets <span class="ot">&lt;-</span> dt1<span class="sc">$</span>Ret<span class="fl">.1</span>min</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>segments <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">A =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">10000</span>,</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">B =</span> <span class="dv">11600</span><span class="sc">:</span><span class="dv">22600</span>,</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">C =</span> <span class="dv">33600</span><span class="sc">:</span><span class="dv">43600</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>vol_list <span class="ot">&lt;-</span> <span class="fu">lapply</span>(<span class="fu">names</span>(segments), <span class="cf">function</span>(seg_name) {</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  idx <span class="ot">&lt;-</span> segments[[seg_name]]</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  r_seg <span class="ot">&lt;-</span> rets[idx]</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  vol_acum <span class="ot">&lt;-</span> <span class="fu">sqrt</span>(<span class="fu">cumsum</span>(r_seg<span class="sc">^</span><span class="dv">2</span>))</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">data.frame</span>(</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">index   =</span> idx,</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">vol     =</span> vol_acum,</span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">segment =</span> seg_name</span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>df_vol <span class="ot">&lt;-</span> <span class="fu">bind_rows</span>(vol_list)</span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(df_vol, <span class="fu">aes</span>(<span class="at">x =</span> index, <span class="at">y =</span> vol, <span class="at">color =</span> segment)) <span class="sc">+</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>    <span class="at">title    =</span> <span class="st">"Volatilidade Realizada Acumulada por Segmento de Índices"</span>,</span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>    <span class="at">x        =</span> <span class="st">"Índice"</span>,</span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>    <span class="at">y        =</span> <span class="st">"Volatilidade Realizada"</span>,</span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>    <span class="at">color    =</span> <span class="st">"Segmento"</span></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-9-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>rets <span class="ot">&lt;-</span> dt1<span class="sc">$</span>Ret<span class="fl">.1</span>min</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>segments <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">A =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">10000</span>,</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">B =</span> <span class="dv">11600</span><span class="sc">:</span><span class="dv">22600</span>,</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">C =</span> <span class="dv">33600</span><span class="sc">:</span><span class="dv">43600</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>vol_list2 <span class="ot">&lt;-</span> <span class="fu">lapply</span>(<span class="fu">names</span>(segments), <span class="cf">function</span>(seg_name) {</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>  idx   <span class="ot">&lt;-</span> segments[[seg_name]]</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>  vol   <span class="ot">&lt;-</span> <span class="fu">sqrt</span>(rets[idx]<span class="sc">^</span><span class="dv">2</span>)</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">data.frame</span>(<span class="at">index =</span> idx, <span class="at">vol =</span> vol, <span class="at">segment =</span> seg_name)</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>})</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>df_vol_inst <span class="ot">&lt;-</span> <span class="fu">bind_rows</span>(vol_list2)</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>plot_segment <span class="ot">&lt;-</span> <span class="cf">function</span>(df, seg_name) {</span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>  df_sub <span class="ot">&lt;-</span> df <span class="sc">%&gt;%</span> <span class="fu">filter</span>(segment <span class="sc">==</span> seg_name)</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">ggplot</span>(df_sub, <span class="fu">aes</span>(<span class="at">x =</span> index, <span class="at">y =</span> vol)) <span class="sc">+</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>    <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>    <span class="fu">labs</span>(</span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>      <span class="at">title =</span> <span class="fu">paste0</span>(<span class="st">"Volatilidade Realizada – Segmento "</span>, seg_name),</span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>      <span class="at">x     =</span> <span class="st">"Índice"</span>,</span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a>      <span class="at">y     =</span> <span class="st">"Volatilidade Realizada (|Retorno|)"</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a>    ) <span class="sc">+</span></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>    <span class="fu">ylim</span>(<span class="dv">0</span>, <span class="fl">0.02</span>)<span class="sc">+</span></span>
+<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a>    <span class="fu">theme_minimal</span>()</span>
+<span id="cb22-26"><a href="#cb22-26" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb22-27"><a href="#cb22-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-28"><a href="#cb22-28" aria-hidden="true" tabindex="-1"></a>plot_A <span class="ot">&lt;-</span> <span class="fu">plot_segment</span>(df_vol_inst, <span class="st">"A"</span>)</span>
+<span id="cb22-29"><a href="#cb22-29" aria-hidden="true" tabindex="-1"></a>plot_B <span class="ot">&lt;-</span> <span class="fu">plot_segment</span>(df_vol_inst, <span class="st">"B"</span>)</span>
+<span id="cb22-30"><a href="#cb22-30" aria-hidden="true" tabindex="-1"></a>plot_C <span class="ot">&lt;-</span> <span class="fu">plot_segment</span>(df_vol_inst, <span class="st">"C"</span>)</span>
+<span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a>plot_A  </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-10-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb23"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>plot_B  </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-10-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>plot_C  </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-10-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>h_mcmc <span class="ot">&lt;-</span> sv_fit<span class="sc">$</span>latent[[<span class="dv">1</span>]]  </span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>h_mat <span class="ot">&lt;-</span> <span class="fu">as.matrix</span>(h_mcmc)     </span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(h_mat)                    </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1] 10000 10000</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>h_mean <span class="ot">&lt;-</span> <span class="fu">colMeans</span>(h_mat)     </span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>vol_est <span class="ot">&lt;-</span> <span class="fu">exp</span>(h_mean <span class="sc">/</span> <span class="dv">2</span>)   </span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>time_index <span class="ot">&lt;-</span> <span class="fu">seq</span>(</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">from       =</span> <span class="fu">as.POSIXct</span>(<span class="st">"2021-01-01 09:31"</span>),</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">by         =</span> <span class="st">"1 min"</span>,</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">length.out =</span> <span class="fu">length</span>(vol_est)</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>h_mcmc <span class="ot">&lt;-</span> sv_fit2<span class="sc">$</span>latent[[<span class="dv">1</span>]]  </span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>h_mat <span class="ot">&lt;-</span> <span class="fu">as.matrix</span>(h_mcmc)     </span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(h_mat)                    </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1]  5000 10001</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb29"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>h_mean <span class="ot">&lt;-</span> <span class="fu">colMeans</span>(h_mat)     </span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>vol_est2 <span class="ot">&lt;-</span> <span class="fu">exp</span>(h_mean <span class="sc">/</span> <span class="dv">2</span>)   </span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>time_index2 <span class="ot">&lt;-</span> <span class="fu">seq</span>(</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">from       =</span> <span class="fu">as.POSIXct</span>(<span class="st">"2021-01-01 09:31"</span>),</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">by         =</span> <span class="st">"1 min"</span>,</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">length.out =</span> <span class="fu">length</span>(vol_est2)</span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>h_mcmc <span class="ot">&lt;-</span> sv_fit3<span class="sc">$</span>latent[[<span class="dv">1</span>]]  </span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>h_mat <span class="ot">&lt;-</span> <span class="fu">as.matrix</span>(h_mcmc)     </span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a><span class="fu">dim</span>(h_mat)                    </span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>[1]  5000 10001</code></pre>
+</div>
+<div class="sourceCode cell-code" id="cb31"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>h_mean <span class="ot">&lt;-</span> <span class="fu">colMeans</span>(h_mat)     </span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>vol_est3 <span class="ot">&lt;-</span> <span class="fu">exp</span>(h_mean <span class="sc">/</span> <span class="dv">2</span>)   </span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>time_index3 <span class="ot">&lt;-</span> <span class="fu">seq</span>(</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">from       =</span> <span class="fu">as.POSIXct</span>(<span class="st">"2021-01-01 09:31"</span>),</span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">by         =</span> <span class="st">"1 min"</span>,</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">length.out =</span> <span class="fu">length</span>(vol_est3)</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>df_est <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> time_index, <span class="at">vol =</span> vol_est)</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>df_est2 <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> time_index2, <span class="at">vol =</span> vol_est2)</span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>df_est3 <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> time_index3, <span class="at">vol =</span> vol_est3)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb32"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(df_est, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> vol)) <span class="sc">+</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_line</span>() <span class="sc">+</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    <span class="at">title =</span> <span class="st">"Volatilidade Estocástica (média posterior)"</span>,</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    <span class="at">x     =</span> <span class="st">"Tempo"</span>,</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    <span class="at">y     =</span> <span class="st">"σ̂_t"</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-12-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="decomposição-modwt" class="level2">
+<h2 class="anchored" data-anchor-id="decomposição-modwt">Decomposição MODWT</h2>
+<ul>
+<li><p><strong>Transformada</strong>: MODWT em 12 níveis, correspondente ao máximo suportado.</p></li>
+<li><p><strong>Onda‑mãe</strong>: Haar, por sua simplicidade e desempenho.</p></li>
+<li><p><strong>Interpretação</strong>: níveis de detalhe (d1, d4, d8, d12) mostram oscilações de alta frequência ligadas ao salto de 22/02/2021; níveis de baixa frequência evidenciam a tendência geral.</p></li>
+</ul>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb33"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>plot_wavelet_levels_modwt_hist <span class="ot">&lt;-</span> <span class="cf">function</span>(df, <span class="at">levels =</span> <span class="dv">12</span>, <span class="at">df_name =</span> <span class="st">"df_est"</span>) {</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>  filter_type <span class="ot">&lt;-</span> <span class="st">"haar"</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>  max_possible_levels <span class="ot">&lt;-</span> <span class="fu">min</span>(levels, <span class="fu">floor</span>(<span class="fu">log2</span>(<span class="fu">nrow</span>(df))))</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>  modwt_result <span class="ot">&lt;-</span> <span class="fu">modwt</span>(df<span class="sc">$</span>vol, <span class="at">n.levels =</span> max_possible_levels, <span class="at">boundary =</span> <span class="st">"reflection"</span>)</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  total_plots <span class="ot">&lt;-</span> max_possible_levels <span class="sc">+</span> <span class="dv">2</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  plots_list <span class="ot">&lt;-</span> <span class="fu">vector</span>(<span class="st">"list"</span>, total_plots)</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (plot_idx <span class="cf">in</span> <span class="fu">seq_len</span>(total_plots)) {</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (plot_idx <span class="sc">==</span> <span class="dv">1</span>) {</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>      plots_list[[plot_idx]] <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> vol)) <span class="sc">+</span></span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"blue"</span>) <span class="sc">+</span></span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, <span class="st">": Série Original"</span>), <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Volatilidade"</span>) <span class="sc">+</span></span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a>      </span>
+<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (plot_idx <span class="sc">==</span> total_plots) {</span>
+<span id="cb33-18"><a href="#cb33-18" aria-hidden="true" tabindex="-1"></a>      approx_modwt <span class="ot">&lt;-</span> modwt_result</span>
+<span id="cb33-19"><a href="#cb33-19" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (j <span class="cf">in</span> <span class="fu">seq_len</span>(max_possible_levels)) approx_modwt<span class="sc">@</span>W[[j]][] <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb33-20"><a href="#cb33-20" aria-hidden="true" tabindex="-1"></a>      approximation <span class="ot">&lt;-</span> <span class="fu">imodwt</span>(approx_modwt)</span>
+<span id="cb33-21"><a href="#cb33-21" aria-hidden="true" tabindex="-1"></a>      df_plot <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> df<span class="sc">$</span>time, <span class="at">value =</span> approximation)</span>
+<span id="cb33-22"><a href="#cb33-22" aria-hidden="true" tabindex="-1"></a>      </span>
+<span id="cb33-23"><a href="#cb33-23" aria-hidden="true" tabindex="-1"></a>      plots_list[[plot_idx]] <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df_plot, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> value)) <span class="sc">+</span></span>
+<span id="cb33-24"><a href="#cb33-24" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"red"</span>) <span class="sc">+</span></span>
+<span id="cb33-25"><a href="#cb33-25" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, <span class="st">": Aproximação (Nível"</span>, max_possible_levels, <span class="st">")"</span>),</span>
+<span id="cb33-26"><a href="#cb33-26" aria-hidden="true" tabindex="-1"></a>             <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Valor"</span>) <span class="sc">+</span></span>
+<span id="cb33-27"><a href="#cb33-27" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb33-28"><a href="#cb33-28" aria-hidden="true" tabindex="-1"></a>      </span>
+<span id="cb33-29"><a href="#cb33-29" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb33-30"><a href="#cb33-30" aria-hidden="true" tabindex="-1"></a>      i <span class="ot">&lt;-</span> plot_idx <span class="sc">-</span> <span class="dv">1</span></span>
+<span id="cb33-31"><a href="#cb33-31" aria-hidden="true" tabindex="-1"></a>      detail_modwt <span class="ot">&lt;-</span> modwt_result</span>
+<span id="cb33-32"><a href="#cb33-32" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (j <span class="cf">in</span> <span class="fu">seq_len</span>(max_possible_levels)) <span class="cf">if</span> (j <span class="sc">!=</span> i) detail_modwt<span class="sc">@</span>W[[j]][] <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb33-33"><a href="#cb33-33" aria-hidden="true" tabindex="-1"></a>      detail_series <span class="ot">&lt;-</span> <span class="fu">imodwt</span>(detail_modwt)</span>
+<span id="cb33-34"><a href="#cb33-34" aria-hidden="true" tabindex="-1"></a>      df_plot <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> df<span class="sc">$</span>time, <span class="at">value =</span> detail_series)</span>
+<span id="cb33-35"><a href="#cb33-35" aria-hidden="true" tabindex="-1"></a>      </span>
+<span id="cb33-36"><a href="#cb33-36" aria-hidden="true" tabindex="-1"></a>      plots_list[[plot_idx]] <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df_plot, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> value)) <span class="sc">+</span></span>
+<span id="cb33-37"><a href="#cb33-37" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"darkgreen"</span>) <span class="sc">+</span></span>
+<span id="cb33-38"><a href="#cb33-38" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, <span class="st">": Detalhe Nível"</span>, i), <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Valor"</span>) <span class="sc">+</span></span>
+<span id="cb33-39"><a href="#cb33-39" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb33-40"><a href="#cb33-40" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb33-41"><a href="#cb33-41" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb33-42"><a href="#cb33-42" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-43"><a href="#cb33-43" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (k <span class="cf">in</span> <span class="fu">seq</span>(<span class="dv">1</span>, <span class="fu">length</span>(plots_list), <span class="at">by =</span> <span class="dv">2</span>)) {</span>
+<span id="cb33-44"><a href="#cb33-44" aria-hidden="true" tabindex="-1"></a>    p1 <span class="ot">&lt;-</span> plots_list[[k]]</span>
+<span id="cb33-45"><a href="#cb33-45" aria-hidden="true" tabindex="-1"></a>    p2 <span class="ot">&lt;-</span> <span class="cf">if</span> ((k <span class="sc">+</span> <span class="dv">1</span>) <span class="sc">&lt;=</span> <span class="fu">length</span>(plots_list)) plots_list[[k <span class="sc">+</span> <span class="dv">1</span>]] <span class="cf">else</span> <span class="cn">NULL</span></span>
+<span id="cb33-46"><a href="#cb33-46" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.null</span>(p2)) {</span>
+<span id="cb33-47"><a href="#cb33-47" aria-hidden="true" tabindex="-1"></a>      <span class="fu">grid.arrange</span>(p1, p2, <span class="at">nrow =</span> <span class="dv">2</span>)</span>
+<span id="cb33-48"><a href="#cb33-48" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb33-49"><a href="#cb33-49" aria-hidden="true" tabindex="-1"></a>      <span class="fu">print</span>(p1)</span>
+<span id="cb33-50"><a href="#cb33-50" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb33-51"><a href="#cb33-51" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb33-52"><a href="#cb33-52" aria-hidden="true" tabindex="-1"></a>  </span>
+<span id="cb33-53"><a href="#cb33-53" aria-hidden="true" tabindex="-1"></a>  <span class="fu">invisible</span>(plots_list)</span>
+<span id="cb33-54"><a href="#cb33-54" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb33-55"><a href="#cb33-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-56"><a href="#cb33-56" aria-hidden="true" tabindex="-1"></a><span class="fu">plot_wavelet_levels_modwt_hist</span>(df_est3, <span class="at">levels =</span> <span class="dv">12</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-5.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-6.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-13-7.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb34"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>plot_wavelet_levels_modwt_jumps <span class="ot">&lt;-</span> <span class="cf">function</span>(df, <span class="at">levels =</span> <span class="dv">15</span>, <span class="at">df_name =</span> <span class="st">"df_est"</span>, momento) {</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  filter_type <span class="ot">&lt;-</span> <span class="st">"haar"</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>  max_levels <span class="ot">&lt;-</span> <span class="fu">min</span>(levels, <span class="fu">floor</span>(<span class="fu">log2</span>(<span class="fu">nrow</span>(df))))</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>  modwt_res <span class="ot">&lt;-</span> <span class="fu">modwt</span>(df<span class="sc">$</span>vol, <span class="at">filter =</span> filter_type, <span class="at">n.levels =</span> max_levels, <span class="at">boundary =</span> <span class="st">"reflection"</span>)</span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>  total_plots <span class="ot">&lt;-</span> max_levels <span class="sc">+</span> <span class="dv">2</span> </span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>  plots <span class="ot">&lt;-</span> <span class="fu">vector</span>(<span class="st">"list"</span>, total_plots)</span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (idx <span class="cf">in</span> <span class="fu">seq_len</span>(total_plots)) {</span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (idx <span class="sc">==</span> <span class="dv">1</span>) {</span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>      p <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> vol)) <span class="sc">+</span></span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"blue"</span>) <span class="sc">+</span></span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, <span class="st">": Série Original"</span>), <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Volatilidade"</span>) <span class="sc">+</span></span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> <span class="cf">if</span> (idx <span class="sc">==</span> total_plots) {</span>
+<span id="cb34-18"><a href="#cb34-18" aria-hidden="true" tabindex="-1"></a>      approx <span class="ot">&lt;-</span> modwt_res</span>
+<span id="cb34-19"><a href="#cb34-19" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (j <span class="cf">in</span> <span class="fu">seq_len</span>(max_levels)) approx<span class="sc">@</span>W[[j]][] <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb34-20"><a href="#cb34-20" aria-hidden="true" tabindex="-1"></a>      series_approx <span class="ot">&lt;-</span> <span class="fu">imodwt</span>(approx)</span>
+<span id="cb34-21"><a href="#cb34-21" aria-hidden="true" tabindex="-1"></a>      df_a <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> df<span class="sc">$</span>time, <span class="at">value =</span> series_approx[<span class="dv">1</span><span class="sc">:</span><span class="fu">nrow</span>(df)])</span>
+<span id="cb34-22"><a href="#cb34-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-23"><a href="#cb34-23" aria-hidden="true" tabindex="-1"></a>      p <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df_a, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> value)) <span class="sc">+</span></span>
+<span id="cb34-24"><a href="#cb34-24" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"red"</span>) <span class="sc">+</span></span>
+<span id="cb34-25"><a href="#cb34-25" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, <span class="st">": Aproximação (Nível"</span>, max_levels, <span class="st">")"</span>),</span>
+<span id="cb34-26"><a href="#cb34-26" aria-hidden="true" tabindex="-1"></a>             <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Valor"</span>) <span class="sc">+</span></span>
+<span id="cb34-27"><a href="#cb34-27" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb34-28"><a href="#cb34-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-29"><a href="#cb34-29" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb34-30"><a href="#cb34-30" aria-hidden="true" tabindex="-1"></a>      i <span class="ot">&lt;-</span> idx <span class="sc">-</span> <span class="dv">1</span></span>
+<span id="cb34-31"><a href="#cb34-31" aria-hidden="true" tabindex="-1"></a>      detail <span class="ot">&lt;-</span> modwt_res</span>
+<span id="cb34-32"><a href="#cb34-32" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> (j <span class="cf">in</span> <span class="fu">seq_len</span>(max_levels)) <span class="cf">if</span> (j <span class="sc">!=</span> i) detail<span class="sc">@</span>W[[j]][] <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb34-33"><a href="#cb34-33" aria-hidden="true" tabindex="-1"></a>      series_det <span class="ot">&lt;-</span> <span class="fu">imodwt</span>(detail)</span>
+<span id="cb34-34"><a href="#cb34-34" aria-hidden="true" tabindex="-1"></a>      df_d <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> df<span class="sc">$</span>time, <span class="at">value =</span> series_det[<span class="dv">1</span><span class="sc">:</span><span class="fu">nrow</span>(df)])</span>
+<span id="cb34-35"><a href="#cb34-35" aria-hidden="true" tabindex="-1"></a>      Wj <span class="ot">&lt;-</span> modwt_res<span class="sc">@</span>W[[i]]</span>
+<span id="cb34-36"><a href="#cb34-36" aria-hidden="true" tabindex="-1"></a>      sigma_j <span class="ot">&lt;-</span> <span class="fu">median</span>(<span class="fu">abs</span>(Wj), <span class="at">na.rm =</span> <span class="cn">TRUE</span>) <span class="sc">/</span> <span class="fl">0.6745</span></span>
+<span id="cb34-37"><a href="#cb34-37" aria-hidden="true" tabindex="-1"></a>      thr_j <span class="ot">&lt;-</span> sigma_j <span class="sc">*</span> <span class="fu">sqrt</span>(<span class="dv">2</span> <span class="sc">*</span> <span class="fu">log</span>(<span class="fu">length</span>(Wj)))</span>
+<span id="cb34-38"><a href="#cb34-38" aria-hidden="true" tabindex="-1"></a>      jumps <span class="ot">&lt;-</span> <span class="fu">which</span>(<span class="fu">abs</span>(Wj) <span class="sc">&gt;</span> thr_j)</span>
+<span id="cb34-39"><a href="#cb34-39" aria-hidden="true" tabindex="-1"></a>      jumps <span class="ot">&lt;-</span> jumps[jumps <span class="sc">&lt;=</span> <span class="fu">nrow</span>(df)]</span>
+<span id="cb34-40"><a href="#cb34-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-41"><a href="#cb34-41" aria-hidden="true" tabindex="-1"></a>      df_d<span class="sc">$</span>jumps <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb34-42"><a href="#cb34-42" aria-hidden="true" tabindex="-1"></a>      df_d<span class="sc">$</span>jumps[jumps] <span class="ot">&lt;-</span> df_d<span class="sc">$</span>value[jumps]</span>
+<span id="cb34-43"><a href="#cb34-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-44"><a href="#cb34-44" aria-hidden="true" tabindex="-1"></a>      p <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df_d, <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> value)) <span class="sc">+</span></span>
+<span id="cb34-45"><a href="#cb34-45" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_line</span>(<span class="at">color =</span> <span class="st">"darkgreen"</span>) <span class="sc">+</span></span>
+<span id="cb34-46"><a href="#cb34-46" aria-hidden="true" tabindex="-1"></a>        <span class="fu">geom_point</span>(<span class="at">data =</span> <span class="fu">subset</span>(df_d, <span class="sc">!</span><span class="fu">is.na</span>(jumps)),</span>
+<span id="cb34-47"><a href="#cb34-47" aria-hidden="true" tabindex="-1"></a>                   <span class="fu">aes</span>(<span class="at">x =</span> time, <span class="at">y =</span> jumps), <span class="at">color =</span> <span class="st">"red"</span>, <span class="at">size =</span> <span class="dv">2</span>) <span class="sc">+</span></span>
+<span id="cb34-48"><a href="#cb34-48" aria-hidden="true" tabindex="-1"></a>        <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, momento, <span class="st">": Detalhe Nível"</span>, i, <span class="st">"com Saltos"</span>),</span>
+<span id="cb34-49"><a href="#cb34-49" aria-hidden="true" tabindex="-1"></a>             <span class="at">x =</span> <span class="st">"Tempo"</span>, <span class="at">y =</span> <span class="st">"Valor"</span>) <span class="sc">+</span></span>
+<span id="cb34-50"><a href="#cb34-50" aria-hidden="true" tabindex="-1"></a>        <span class="fu">theme_minimal</span>()</span>
+<span id="cb34-51"><a href="#cb34-51" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb34-52"><a href="#cb34-52" aria-hidden="true" tabindex="-1"></a>    plots[[idx]] <span class="ot">&lt;-</span> p</span>
+<span id="cb34-53"><a href="#cb34-53" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb34-54"><a href="#cb34-54" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-55"><a href="#cb34-55" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (k <span class="cf">in</span> <span class="fu">seq</span>(<span class="dv">1</span>, <span class="fu">length</span>(plots), <span class="at">by =</span> <span class="dv">2</span>)) {</span>
+<span id="cb34-56"><a href="#cb34-56" aria-hidden="true" tabindex="-1"></a>    p1 <span class="ot">&lt;-</span> plots[[k]]</span>
+<span id="cb34-57"><a href="#cb34-57" aria-hidden="true" tabindex="-1"></a>    p2 <span class="ot">&lt;-</span> <span class="cf">if</span> ((k<span class="sc">+</span><span class="dv">1</span>) <span class="sc">&lt;=</span> <span class="fu">length</span>(plots)) plots[[k<span class="sc">+</span><span class="dv">1</span>]] <span class="cf">else</span> <span class="cn">NULL</span></span>
+<span id="cb34-58"><a href="#cb34-58" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.null</span>(p2)) {</span>
+<span id="cb34-59"><a href="#cb34-59" aria-hidden="true" tabindex="-1"></a>      <span class="fu">grid.arrange</span>(p1, p2, <span class="at">nrow =</span> <span class="dv">2</span>)</span>
+<span id="cb34-60"><a href="#cb34-60" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb34-61"><a href="#cb34-61" aria-hidden="true" tabindex="-1"></a>      <span class="fu">print</span>(p1)</span>
+<span id="cb34-62"><a href="#cb34-62" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb34-63"><a href="#cb34-63" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb34-64"><a href="#cb34-64" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-65"><a href="#cb34-65" aria-hidden="true" tabindex="-1"></a>  <span class="fu">invisible</span>(plots)</span>
+<span id="cb34-66"><a href="#cb34-66" aria-hidden="true" tabindex="-1"></a>}</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb35"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot_wavelet_levels_modwt_jumps</span>(df_est, <span class="at">levels =</span> <span class="dv">12</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>, <span class="at">momento =</span> <span class="st">"Pré queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-5.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-6.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-15-7.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb36"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot_wavelet_levels_modwt_jumps</span>(df_est2, <span class="at">levels =</span> <span class="dv">12</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>, <span class="at">momento =</span> <span class="st">"Durante a queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-5.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-6.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-16-7.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb37"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="fu">plot_wavelet_levels_modwt_jumps</span>(df_est3, <span class="at">levels =</span> <span class="dv">12</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>, <span class="at">momento =</span> <span class="st">"Pós queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-5.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-6.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-17-7.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb38"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a>detect_jumps_modwt <span class="ot">&lt;-</span> <span class="cf">function</span>(df, <span class="at">levels =</span> <span class="dv">12</span>) {</span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  filter_type <span class="ot">&lt;-</span> <span class="st">"haar"</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>  max_levels <span class="ot">&lt;-</span> <span class="fu">min</span>(levels, <span class="fu">floor</span>(<span class="fu">log2</span>(<span class="fu">nrow</span>(df))))</span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  modwt_res <span class="ot">&lt;-</span> <span class="fu">modwt</span>(df<span class="sc">$</span>vol, <span class="at">filter =</span> filter_type, <span class="at">n.levels =</span> max_levels, <span class="at">boundary =</span> <span class="st">"reflection"</span>)</span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>  jump_indices_list <span class="ot">&lt;-</span> <span class="fu">vector</span>(<span class="st">"list"</span>, max_levels)</span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (level <span class="cf">in</span> <span class="fu">seq_len</span>(max_levels)) {</span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>    Wj <span class="ot">&lt;-</span> modwt_res<span class="sc">@</span>W[[level]]</span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a>    sigma_j <span class="ot">&lt;-</span> <span class="fu">median</span>(<span class="fu">abs</span>(Wj), <span class="at">na.rm =</span> <span class="cn">TRUE</span>) <span class="sc">/</span> <span class="fl">0.6745</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>    thr_j <span class="ot">&lt;-</span> sigma_j <span class="sc">*</span> <span class="fu">sqrt</span>(<span class="dv">2</span> <span class="sc">*</span> <span class="fu">log</span>(<span class="fu">length</span>(Wj)))</span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a>    idx <span class="ot">&lt;-</span> <span class="fu">which</span>(<span class="fu">abs</span>(Wj) <span class="sc">&gt;</span> thr_j)</span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a>    jump_indices_list[[level]] <span class="ot">&lt;-</span> idx[idx <span class="sc">&lt;=</span> <span class="fu">nrow</span>(df)]</span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">list</span>(<span class="at">modwt =</span> modwt_res, <span class="at">jumps =</span> jump_indices_list)</span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a>}</span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a>model_jump_intensity <span class="ot">&lt;-</span> <span class="cf">function</span>(df, jump_list, <span class="at">window =</span> <span class="st">"hour"</span>, <span class="at">df_name =</span> <span class="st">"df_est"</span>,momento) {</span>
+<span id="cb38-17"><a href="#cb38-17" aria-hidden="true" tabindex="-1"></a>  intensity_plots <span class="ot">&lt;-</span> <span class="fu">list</span>()</span>
+<span id="cb38-18"><a href="#cb38-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (level <span class="cf">in</span> <span class="fu">seq_along</span>(jump_list)) {</span>
+<span id="cb38-19"><a href="#cb38-19" aria-hidden="true" tabindex="-1"></a>    idx <span class="ot">&lt;-</span> jump_list[[level]]</span>
+<span id="cb38-20"><a href="#cb38-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="fu">length</span>(idx) <span class="sc">==</span> <span class="dv">0</span>) <span class="cf">next</span></span>
+<span id="cb38-21"><a href="#cb38-21" aria-hidden="true" tabindex="-1"></a>    times <span class="ot">&lt;-</span> df<span class="sc">$</span>time[idx]</span>
+<span id="cb38-22"><a href="#cb38-22" aria-hidden="true" tabindex="-1"></a>    df_counts <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">time =</span> times) <span class="sc">%&gt;%</span></span>
+<span id="cb38-23"><a href="#cb38-23" aria-hidden="true" tabindex="-1"></a>      <span class="fu">mutate</span>(<span class="at">interval =</span> <span class="fu">floor_date</span>(time, <span class="at">unit =</span> window)) <span class="sc">%&gt;%</span></span>
+<span id="cb38-24"><a href="#cb38-24" aria-hidden="true" tabindex="-1"></a>      <span class="fu">count</span>(interval)</span>
+<span id="cb38-25"><a href="#cb38-25" aria-hidden="true" tabindex="-1"></a>    fit <span class="ot">&lt;-</span> <span class="fu">glm</span>(n <span class="sc">~</span> <span class="dv">1</span>, <span class="at">family =</span> poisson, <span class="at">data =</span> df_counts)</span>
+<span id="cb38-26"><a href="#cb38-26" aria-hidden="true" tabindex="-1"></a>    lambda_hat <span class="ot">&lt;-</span> <span class="fu">exp</span>(<span class="fu">coef</span>(fit))</span>
+<span id="cb38-27"><a href="#cb38-27" aria-hidden="true" tabindex="-1"></a>    p <span class="ot">&lt;-</span> <span class="fu">ggplot</span>(df_counts, <span class="fu">aes</span>(<span class="at">x =</span> interval, <span class="at">y =</span> n)) <span class="sc">+</span></span>
+<span id="cb38-28"><a href="#cb38-28" aria-hidden="true" tabindex="-1"></a>      <span class="fu">geom_bar</span>(<span class="at">stat =</span> <span class="st">"identity"</span>, <span class="at">fill =</span> <span class="st">"steelblue"</span>) <span class="sc">+</span></span>
+<span id="cb38-29"><a href="#cb38-29" aria-hidden="true" tabindex="-1"></a>      <span class="fu">geom_hline</span>(<span class="at">yintercept =</span> lambda_hat, <span class="at">linetype =</span> <span class="st">"dashed"</span>, <span class="at">color =</span> <span class="st">"red"</span>) <span class="sc">+</span></span>
+<span id="cb38-30"><a href="#cb38-30" aria-hidden="true" tabindex="-1"></a>      <span class="fu">labs</span>(<span class="at">title =</span> <span class="fu">paste</span>(df_name, momento, <span class="st">": Intensidade de Saltos - Nível"</span>, level),</span>
+<span id="cb38-31"><a href="#cb38-31" aria-hidden="true" tabindex="-1"></a>           <span class="at">subtitle =</span> <span class="fu">paste</span>(<span class="st">"Lambda estimado ="</span>, <span class="fu">round</span>(lambda_hat, <span class="dv">3</span>)),</span>
+<span id="cb38-32"><a href="#cb38-32" aria-hidden="true" tabindex="-1"></a>           <span class="at">x =</span> <span class="fu">paste</span>(<span class="st">"Intervalo ("</span>, window, <span class="st">")"</span>, <span class="at">sep =</span> <span class="st">""</span>), <span class="at">y =</span> <span class="st">"Contagem de Saltos"</span>) <span class="sc">+</span></span>
+<span id="cb38-33"><a href="#cb38-33" aria-hidden="true" tabindex="-1"></a>      <span class="fu">theme_minimal</span>()</span>
+<span id="cb38-34"><a href="#cb38-34" aria-hidden="true" tabindex="-1"></a>    intensity_plots[[level]] <span class="ot">&lt;-</span> p</span>
+<span id="cb38-35"><a href="#cb38-35" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb38-36"><a href="#cb38-36" aria-hidden="true" tabindex="-1"></a>  plot_indices <span class="ot">&lt;-</span> <span class="fu">which</span>(<span class="sc">!</span><span class="fu">sapply</span>(intensity_plots, is.null))</span>
+<span id="cb38-37"><a href="#cb38-37" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> (k <span class="cf">in</span> <span class="fu">seq</span>(<span class="dv">1</span>, <span class="fu">length</span>(plot_indices), <span class="at">by =</span> <span class="dv">2</span>)) {</span>
+<span id="cb38-38"><a href="#cb38-38" aria-hidden="true" tabindex="-1"></a>    p1 <span class="ot">&lt;-</span> intensity_plots[[plot_indices[k]]]</span>
+<span id="cb38-39"><a href="#cb38-39" aria-hidden="true" tabindex="-1"></a>    p2 <span class="ot">&lt;-</span> <span class="cf">if</span> ((k<span class="sc">+</span><span class="dv">1</span>) <span class="sc">&lt;=</span> <span class="fu">length</span>(plot_indices)) intensity_plots[[plot_indices[k<span class="sc">+</span><span class="dv">1</span>]]] <span class="cf">else</span> <span class="cn">NULL</span></span>
+<span id="cb38-40"><a href="#cb38-40" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> (<span class="sc">!</span><span class="fu">is.null</span>(p2)) {</span>
+<span id="cb38-41"><a href="#cb38-41" aria-hidden="true" tabindex="-1"></a>      <span class="fu">grid.arrange</span>(p1, p2, <span class="at">nrow =</span> <span class="dv">2</span>)</span>
+<span id="cb38-42"><a href="#cb38-42" aria-hidden="true" tabindex="-1"></a>    } <span class="cf">else</span> {</span>
+<span id="cb38-43"><a href="#cb38-43" aria-hidden="true" tabindex="-1"></a>      <span class="fu">print</span>(p1)</span>
+<span id="cb38-44"><a href="#cb38-44" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb38-45"><a href="#cb38-45" aria-hidden="true" tabindex="-1"></a>  }</span>
+<span id="cb38-46"><a href="#cb38-46" aria-hidden="true" tabindex="-1"></a>  <span class="fu">invisible</span>(intensity_plots)</span>
+<span id="cb38-47"><a href="#cb38-47" aria-hidden="true" tabindex="-1"></a>}</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb39"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a>res <span class="ot">&lt;-</span> <span class="fu">detect_jumps_modwt</span>(df_est, <span class="at">levels =</span> <span class="dv">12</span>)</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="fu">model_jump_intensity</span>(df_est, res<span class="sc">$</span>jumps, <span class="at">window =</span> <span class="st">"hour"</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>,<span class="at">momento =</span> <span class="st">"Pré queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-19-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-19-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-19-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-19-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb40"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>res2 <span class="ot">&lt;-</span> <span class="fu">detect_jumps_modwt</span>(df_est2, <span class="at">levels =</span> <span class="dv">12</span>)</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="fu">model_jump_intensity</span>(df_est2, res2<span class="sc">$</span>jumps, <span class="at">window =</span> <span class="st">"hour"</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>,<span class="at">momento =</span> <span class="st">"Durante a queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-20-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-20-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-20-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-20-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb41"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a>res3 <span class="ot">&lt;-</span> <span class="fu">detect_jumps_modwt</span>(df_est3, <span class="at">levels =</span> <span class="dv">12</span>)</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="fu">model_jump_intensity</span>(df_est3, res3<span class="sc">$</span>jumps, <span class="at">window =</span> <span class="st">"hour"</span>, <span class="at">df_name =</span> <span class="st">"PETR4"</span>,<span class="at">momento =</span> <span class="st">"Pós queda"</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-21-1.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-21-2.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-21-3.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="analise_volatilidade_petr4_files/figure-html/unnamed-chunk-21-4.png" class="img-fluid figure-img" width="672"></p>
+</figure>
+</div>
+</div>
+</div>
+<pre><code></code></pre>
+</section>
+<section id="descrição-dos-dados" class="level2">
+<h2 class="anchored" data-anchor-id="descrição-dos-dados">Descrição dos Dados</h2>
+<p>Para ilustrar a identificação de saltos em diferentes escalas, foi utilizada a série de preços da PETR4 (Petrobrás) no período de 04/01/2021 a 25/06/2021, com frequência de 1 minuto. A escolha deste ativo deve-se à sua alta liquidez e influência sobre o Ibovespa, além de um evento de queda acentuada em 22/02/2021, motivado pelo anúncio de troca de presidência da empresa.</p>
+<ul>
+<li><p><strong>Fonte</strong>: MetaTrader&nbsp;5.</p></li>
+<li><p><strong>Período</strong>: 04/01/2021 a 25/06/2021 (119 dias, 49 611 observações).</p></li>
+<li><p><strong>Ajustes</strong>: remoção dos primeiros 19 minutos após abertura (10h20 em diante), para evitar ruídos de leilão de abertura.</p></li>
+</ul>
+</section>
+<section id="próximos-passos" class="level2">
+<h2 class="anchored" data-anchor-id="próximos-passos">Próximos Passos</h2>
+<ul>
+<li>Como reproduzir a serie estocastica.</li>
+<li>Identificar saltos na serie estocastica limite universal.</li>
+<li>tentar deconpor em ondaleta se possivel a serie estocastica.</li>
+</ul>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const onCopySuccess = function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  }
+  const getTextToCopy = function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+    text: getTextToCopy
+  });
+  clipboard.on('success', onCopySuccess);
+  if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+    // For code content inside modals, clipBoardJS needs to be initialized with a container option
+    // TODO: Check when it could be a function (https://github.com/zenorocha/clipboard.js/issues/860)
+    const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+      text: getTextToCopy,
+      container: window.document.getElementById('quarto-embedded-source-code-modal')
+    });
+    clipboardModal.on('success', onCopySuccess);
+  }
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp('/' + window.location.host + '/');
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
